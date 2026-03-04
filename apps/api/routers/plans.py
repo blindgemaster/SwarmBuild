@@ -36,9 +36,14 @@ async def _generate_plan_background(job_id: str):
     job = job_result.data[0]
 
     try:
-        # Import harness-gen (local package)
+        # Import harness-gen (local package) using absolute path relative to this file
         import sys
-        sys.path.insert(0, "../../packages/harness-gen")
+        import os
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+        harness_gen_dir = os.path.join(repo_root, "packages", "harness-gen")
+        if harness_gen_dir not in sys.path:
+            sys.path.insert(0, harness_gen_dir)
+            
         from generator import generate_harness, JobSpec
 
         # Fetch community discussion to inform the plan
