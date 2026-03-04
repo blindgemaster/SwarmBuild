@@ -1,0 +1,29 @@
+{
+  "name": "swarmbuild",
+  "version": "1.0.0",
+  "main": "index.js",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev --workspace=apps/web",
+    "dev:api": "cd apps/api && uvicorn main:app --reload --port 8000",
+    "dev:all": "concurrently \"npm run dev:api\" \"npm run dev:web\"",
+    "agent": "node packages/cli/bin/swarmbuild.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "dotenv": "^17.3.1",
+    "pg": "^8.18.0"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "jsdom": "^28.1.0"
+  }
+}

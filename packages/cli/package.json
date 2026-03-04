@@ -1,0 +1,23 @@
+{
+  "name": "swarmbuild-cli",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "module",
+  "bin": {
+    "swarmbuild-cli": "./bin/swarmbuild.js"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "axios": "^1.13.5",
+    "commander": "^14.0.3",
+    "dotenv": "^17.3.1",
+    "ws": "^8.19.0"
+  }
+}
