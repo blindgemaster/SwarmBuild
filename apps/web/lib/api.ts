@@ -1,28 +1,38 @@
 /**
  * Swarmbuild API Client
  *
- * All API calls go through here.
- * In dev mode, uses the dev token for auth.
+ * Auth: reads the active Supabase session token, falling back to the dev
+ * token only when NEXT_PUBLIC_DEV_TOKEN is set (local dev without OAuth).
  */
 
+import { supabase } from "@/lib/supabase";
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-const DEV_TOKEN = "dev-token-swarmbuild-test";
+const DEV_TOKEN = process.env.NEXT_PUBLIC_DEV_TOKEN || "dev-token-swarmbuild-test";
 
 // ── Helpers ────────────────────────────────────────
 
-function authHeaders(): HeadersInit {
+async function getToken(): Promise<string> {
+    const { data: { session } } = await supabase.auth.getSession();
+    return session?.access_token ?? DEV_TOKEN;
+}
+
+async function authHeaders(): Promise<HeadersInit> {
+    const token = await getToken();
     return {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${DEV_TOKEN}`,
+        Authorization: `Bearer ${token}`,
     };
 }
 
+
 async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
+    const headers = await authHeaders();
     const res = await fetch(`${API_BASE}${path}`, {
         ...options,
         headers: {
-            ...authHeaders(),
-            ...options?.headers,
+            ...headers,
+            ...(options?.headers as Record<string, string> | undefined),
         },
     });
 
