@@ -30,10 +30,13 @@ CREATE TABLE IF NOT EXISTS jobs (
     agent_prompt    TEXT,
     test_harness    JSONB,
     task_list       JSONB,
+    required_roles  TEXT[] DEFAULT '{}'::text[],
+    required_agent_count INT DEFAULT 1,
 
     -- GitHub output
-    github_repo     TEXT,
-    clone_url       TEXT,
+    github_repo_url          TEXT,
+    github_repo_id           TEXT,
+    github_deploy_key_private TEXT,
 
     -- Completion
     completed_at    TIMESTAMPTZ,

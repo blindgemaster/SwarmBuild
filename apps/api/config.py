@@ -31,6 +31,7 @@ class Settings(BaseSettings):
 
     # CORS
     frontend_url: str = "http://localhost:3000"
+    api_url: str = "http://localhost:8000"
 
     # Dev mode — bypasses auth, enables test data endpoints
     dev_mode: bool = True

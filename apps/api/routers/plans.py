@@ -38,6 +38,18 @@ async def _generate_plan_background(job_id: str):
     try:
         # Import harness-gen from lib
         from lib.harness_gen.generator import generate_harness, JobSpec
+        from lib.harness_gen.safety import safety_check
+
+        # Run content safety check before generating plan
+        safety = await safety_check(job["title"], job["description"], settings.hugging_face_token)
+        if not safety.get("safe", True):
+            print(f"[api] Safety check REJECTED job {job_id}: {safety.get('reason', 'Unknown')}")
+            db.table("jobs").update({
+                "status": "failed",
+                "error_message": f"Content safety check failed: {safety.get('reason', 'Unknown')}",
+                "updated_at": datetime.utcnow().isoformat(),
+            }).eq("id", job_id).execute()
+            return
 
         # Fetch community discussion to inform the plan
         comments_result = (

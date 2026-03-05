@@ -4,7 +4,7 @@ Worker Protocol Router — Endpoints called by contributor Docker containers
 These endpoints are authenticated via worker_token (not user session).
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
@@ -31,7 +31,7 @@ def _verify_token(token: str) -> dict:
 
     # Check expiry
     expires = datetime.fromisoformat(contributor["token_expires"].replace("Z", "+00:00"))
-    if datetime.utcnow().replace(tzinfo=expires.tzinfo) > expires:
+    if datetime.now(timezone.utc) > expires:
         raise HTTPException(status_code=401, detail="Worker token expired")
 
     return contributor

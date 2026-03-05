@@ -50,10 +50,14 @@ async def register_contributor(job_id: str, req: ContributeRequest, request: Req
     # Build cli command string (used for both new and existing)
     from config import get_settings
     settings = get_settings()
-    relay_url = settings.frontend_url.replace(":3000", ":8000")  # API URL
+    relay_url = settings.api_url
     
-    # In dev mode, we need to instruct the CLI to bypass auth with our dummy token
-    cli_command = f"npx swarmbuild-cli run {job_id} --role {req.role} --relay {relay_url} --token dev-token-swarmbuild-test"
+    # In dev mode, include the dummy auth token so the CLI can bypass auth.
+    # In production, users must authenticate separately.
+    if settings.dev_mode:
+        cli_command = f"npx swarmbuild-cli run {job_id} --role {req.role} --relay {relay_url} --token dev-token-swarmbuild-test"
+    else:
+        cli_command = f"npx swarmbuild-cli run {job_id} --role {req.role} --relay {relay_url}"
 
     # Check if already contributing WITH THIS SPECIFIC ROLE
     existing = (
@@ -232,27 +236,22 @@ async def list_contributors(job_id: str):
     """List active contributors for a job."""
     db = get_supabase()
 
+    # Enrich with profile data via join
     result = (
         db.table("contributors")
-        .select("id, user_id, joined_at, last_seen, num_agents, tokens_used, sessions_run, commits_pushed, role, is_ready")
+        .select("id, user_id, joined_at, last_seen, num_agents, tokens_used, sessions_run, commits_pushed, role, is_ready, profiles(username, display_name, avatar_url)")
         .eq("job_id", job_id)
         .is_("left_at", "null")
         .order("joined_at")
         .execute()
     )
 
-    # Enrich with profile data
     contributors = []
     for c in result.data:
-        profile = (
-            db.table("profiles")
-            .select("username, display_name, avatar_url")
-            .eq("id", c["user_id"])
-            .execute()
-        )
+        profile = c.pop("profiles", None)
         contributor_data = {
             **c,
-            "profile": profile.data[0] if profile.data else None,
+            "profile": profile,
         }
         contributors.append(contributor_data)
 
