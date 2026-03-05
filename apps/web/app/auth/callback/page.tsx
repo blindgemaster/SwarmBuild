@@ -5,30 +5,44 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 
 /**
- * Supabase redirects back to /auth/callback after Google OAuth.
- * This page exchanges the code for a session and then redirects home.
+ * Supabase OAuth callback handler.
+ *
+ * Handles both flows:
+ *  - PKCE (preferred): ?code=xxx → exchangeCodeForSession → redirect to /
+ *  - Implicit (legacy): #access_token=xxx → already in session → redirect to /
  */
 export default function AuthCallbackPage() {
     const router = useRouter();
 
     useEffect(() => {
-        supabase.auth.getSession().then(({ data: { session } }: { data: { session: import("@supabase/supabase-js").Session | null } }) => {
-            // Session is automatically set by Supabase from the URL hash/code
+        async function handleCallback() {
+            // Check for PKCE code in query params
+            const params = new URLSearchParams(window.location.search);
+            const code = params.get("code");
+
+            if (code) {
+                const { error } = await supabase.auth.exchangeCodeForSession(code);
+                if (error) {
+                    console.error("Code exchange failed:", error.message);
+                    router.replace("/login?error=auth_failed");
+                    return;
+                }
+                router.replace("/");
+                return;
+            }
+
+            // Fallback: check if session already exists (implicit flow already set it)
+            const { data: { session } } = await supabase.auth.getSession();
             if (session) {
                 router.replace("/");
-            } else {
-                // Fallback: try exchanging code from URL params
-                const params = new URLSearchParams(window.location.search);
-                const code = params.get("code");
-                if (code) {
-                    supabase.auth.exchangeCodeForSession(code).then(() => {
-                        router.replace("/");
-                    });
-                } else {
-                    router.replace("/login");
-                }
+                return;
             }
-        });
+
+            // Nothing worked
+            router.replace("/login?error=no_session");
+        }
+
+        handleCallback();
     }, [router]);
 
     return (

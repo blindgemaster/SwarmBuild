@@ -36,6 +36,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setSession(session);
             setUser(session?.user ?? null);
             setLoading(false);
+            // Clean the ugly #access_token=... hash from the URL after implicit-flow login
+            if (_event === "SIGNED_IN" && window.location.hash.includes("access_token")) {
+                window.history.replaceState(null, "", window.location.pathname);
+            }
         });
 
         return () => subscription.unsubscribe();
