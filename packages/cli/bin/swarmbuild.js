@@ -23,7 +23,7 @@ program
     .command("run <job_id>")
     .description("Join a Swarmbuild job and start the MCP server + Claude")
     .requiredOption("--role <role>", "Your agent's role (lead, frontend, backend, etc)")
-    .option("--relay <url>", "Swarmbuild API URL", "http://localhost:8000")
+    .option("--relay <url>", "Swarmbuild API URL", process.env.SWARMBUILD_API_URL || "https://swarmbuild.onrender.com")
     .option("--token <dev_token>", "Your user dev token for registration")
     .action(async (jobId, options) => {
         try {

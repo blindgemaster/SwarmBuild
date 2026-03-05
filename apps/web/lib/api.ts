@@ -7,7 +7,7 @@
 
 import { supabase } from "@/lib/supabase";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://swarmbuild.onrender.com";
 const DEV_TOKEN = process.env.NEXT_PUBLIC_DEV_TOKEN || "dev-token-swarmbuild-test";
 
 // ── Helpers ────────────────────────────────────────

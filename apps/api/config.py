@@ -30,8 +30,8 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379"
 
     # CORS
-    frontend_url: str = "http://localhost:3000"
-    api_url: str = "http://localhost:8000"
+    frontend_url: str = "https://swarm-build-web.vercel.app"
+    api_url: str = "https://swarmbuild.onrender.com"
 
     # Dev mode — bypasses auth, enables test data endpoints
     dev_mode: bool = True
