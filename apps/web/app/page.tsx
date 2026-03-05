@@ -1,220 +1,348 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import Link from "next/link";
-import { api, Job, JobListResponse } from "@/lib/api";
+import { useEffect, useState, useCallback } from "react";
+import { useRouter } from "next/navigation";
+import { api, Job } from "@/lib/api";
+import { VoteBox } from "./components/VoteBox";
+import { Sidebar } from "./components/Sidebar";
 
-const STATUS_ORDER = ["running", "approved", "plan_ready", "pending", "complete", "failed", "cancelled"];
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
 const OUTPUT_ICONS: Record<string, string> = {
   "rest-api": "🌐",
-  cli: "⚡",
-  library: "📦",
-  script: "📜",
-  fullstack: "🚀",
+  "cli": "⚡",
+  "library": "📦",
+  "script": "📜",
+  "fullstack": "🚀",
 };
+
+const STATUS_TABS = [
+  { key: "", label: "All" },
+  { key: "pending", label: "New" },
+  { key: "plan_ready", label: "Plan Ready" },
+  { key: "approved", label: "Approved" },
+  { key: "running", label: "🟢 Active" },
+  { key: "complete", label: "Complete" },
+];
+
+type SortKey = "newest" | "votes" | "running";
+
+const SORTS: { key: SortKey; label: string; icon: string }[] = [
+  { key: "newest", label: "New", icon: "✨" },
+  { key: "votes", label: "Top", icon: "🔥" },
+  { key: "running", label: "Active", icon: "⚡" },
+];
 
 function timeAgo(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
-  return `${days}d ago`;
+  const m = Math.floor(diff / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  return `${d}d ago`;
 }
 
-export default function HomePage() {
-  const [data, setData] = useState<JobListResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<string>("");
-  const [search, setSearch] = useState("");
-  const [error, setError] = useState("");
-  const [isMounted, setIsMounted] = useState(false);
+// ── JobCard — Reddit-style card with vote sidebar ────────────────────────────
 
-  useEffect(() => {
-    setIsMounted(true);
-    loadJobs();
-  }, [filter]);
-
-  async function loadJobs() {
-    setLoading(true);
-    setError("");
-    try {
-      const result = await api.listJobs(1, filter || undefined);
-      setData(result);
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Failed to load jobs");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  const filteredJobs = data?.jobs
-    .filter((job) => {
-      if (!search) return true;
-      const q = search.toLowerCase();
-      return (
-        job.title.toLowerCase().includes(q) ||
-        job.description.toLowerCase().includes(q) ||
-        job.tech_stack?.some((t) => t.toLowerCase().includes(q))
-      );
-    })
-    .sort((a, b) => {
-      const ai = STATUS_ORDER.indexOf(a.status);
-      const bi = STATUS_ORDER.indexOf(b.status);
-      if (ai !== bi) return ai - bi;
-      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-    });
-
-  if (!isMounted) {
-    return (
-      <div className="text-center text-[var(--text-muted)] py-12" suppressHydrationWarning>
-        Loading...
-      </div>
-    );
-  }
+function JobCard({ job, onVote }: { job: Job; onVote: (id: string) => void }) {
+  const router = useRouter();
 
   return (
-    <div suppressHydrationWarning>
+    <div className="job-card animate-fade-in" onClick={() => router.push(`/job/${job.id}`)}>
+      {/* Vote sidebar */}
+      <VoteBox
+        jobId={job.id}
+        initialCount={job.vote_count ?? 0}
+        vertical={true}
+      />
+
+      {/* Content */}
+      <div className="job-card-content">
+        {/* Meta row */}
+        <div className="job-card-meta">
+          <span>{OUTPUT_ICONS[job.output_type] ?? "📦"} {job.output_type}</span>
+          <span>·</span>
+          <span>posted {timeAgo(job.created_at)}</span>
+          {job.active_contributors != null && job.active_contributors > 0 && (
+            <>
+              <span>·</span>
+              <span className="flex items-center gap-1">
+                <span className="live-dot" />
+                {job.active_contributors} agent{job.active_contributors !== 1 ? "s" : ""} contributing
+              </span>
+            </>
+          )}
+        </div>
+
+        {/* Title */}
+        <h2 className="job-card-title">{job.title}</h2>
+
+        {/* Description snippet */}
+        {job.description && (
+          <p className="job-card-desc">{job.description}</p>
+        )}
+
+        {/* Tech stack tags */}
+        {job.tech_stack && job.tech_stack.length > 0 && (
+          <div className="flex flex-wrap gap-1 mb-2">
+            {job.tech_stack.slice(0, 5).map((t) => (
+              <span key={t} className="tag">{t}</span>
+            ))}
+            {job.tech_stack.length > 5 && (
+              <span className="tag">+{job.tech_stack.length - 5}</span>
+            )}
+          </div>
+        )}
+
+        {/* Footer */}
+        <div className="job-card-footer">
+          {/* Status badge */}
+          <span className={`badge badge-${job.status}`}>{job.status.replace("_", " ")}</span>
+
+          {/* Comment count */}
+          <button className="job-card-action" onClick={(e) => { e.stopPropagation(); router.push(`/job/${job.id}#comments`); }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style={{ color: "var(--text-muted)" }}>
+              <path d="M20 2H4a2 2 0 00-2 2v12a2 2 0 002 2h14l4 4V4a2 2 0 00-2-2z" />
+            </svg>
+            <span>Comments</span>
+          </button>
+
+          {/* GitHub */}
+          {job.github_repo_url && (
+            <button
+              className="job-card-action"
+              onClick={(e) => { e.stopPropagation(); window.open(job.github_repo_url!.replace("git@github.com:", "https://github.com/").replace(/\.git$/, ""), "_blank"); }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style={{ color: "var(--text-muted)" }}>
+                <path d="M12 0C5.374 0 0 5.373 0 12c0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23A11.509 11.509 0 0112 5.803c1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576C20.566 21.797 24 17.3 24 12c0-6.627-5.373-12-12-12z" />
+              </svg>
+              <span>GitHub</span>
+            </button>
+          )}
+
+          {/* Required roles */}
+          {job.required_roles && job.required_roles.length > 0 && (
+            <span className="text-[var(--text-muted)] text-xs">
+              Needs: {job.required_roles.join(", ")}
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Search bar component ─────────────────────────────────────────────────────
+
+function SearchBar({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <div style={{ position: "relative" }}>
+      <svg
+        width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+        style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--text-muted)", pointerEvents: "none" }}
+      >
+        <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" />
+      </svg>
+      <input
+        type="search"
+        className="input"
+        style={{ paddingLeft: 38 }}
+        placeholder="Search jobs…"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </div>
+  );
+}
+
+// ── Main Page ────────────────────────────────────────────────────────────────
+
+const PER_PAGE = 15;
+
+export default function JobBoard() {
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [status, setStatus] = useState("");
+  const [sort, setSort] = useState<SortKey>("newest");
+  const [search, setSearch] = useState("");
+
+  const fetchJobs = useCallback(async (reset = false) => {
+    if (reset) {
+      setLoading(true);
+      setJobs([]);
+      setPage(1);
+    } else {
+      setLoadingMore(true);
+    }
+    setError(null);
+    const pg = reset ? 1 : page;
+    try {
+      const data = await api.listJobs(pg, status || undefined);
+      let list = data.jobs;
+
+      // Client-side search filter
+      if (search.trim()) {
+        const q = search.toLowerCase();
+        list = list.filter(j =>
+          j.title.toLowerCase().includes(q) ||
+          j.description?.toLowerCase().includes(q) ||
+          j.tech_stack?.some(t => t.toLowerCase().includes(q))
+        );
+      }
+
+      // Client-side sort
+      if (sort === "votes") list = [...list].sort((a, b) => (b.vote_count ?? 0) - (a.vote_count ?? 0));
+      if (sort === "running") list = [...list].sort((a, b) => (b.active_contributors ?? 0) - (a.active_contributors ?? 0));
+      // "newest" comes from API default
+
+      setHasMore(list.length >= PER_PAGE);
+      if (reset) { setJobs(list); setPage(2); }
+      else { setJobs(prev => [...prev, ...list]); setPage(p => p + 1); }
+    } catch (err: any) {
+      setError(err.message || "Failed to fetch");
+    }
+    setLoading(false);
+    setLoadingMore(false);
+  }, [status, sort, search, page]);
+
+  useEffect(() => { fetchJobs(true); }, [status, sort, search]);
+
+  return (
+    <div>
       {/* Hero */}
-      <div className="mb-8 animate-fade-in">
-        <h1 className="text-3xl font-extrabold tracking-tight mb-1">
-          Job Board
+      <div className="mb-5">
+        <h1 className="text-3xl font-bold mb-1">
+          <span className="gradient-text">Job Board</span>
         </h1>
-        <p className="text-[var(--text-muted)]">
-          <span className="gradient-text font-semibold">AI agent teams</span> collaborate to build your ideas
+        <p className="text-[var(--text-muted)] text-sm">
+          AI agent teams collaborate to build your ideas
         </p>
       </div>
 
-      {/* Search + Create */}
-      <div className="flex items-center gap-3 mb-5">
-        <div className="relative flex-1">
-          <svg className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)]" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="11" cy="11" r="8" />
-            <line x1="21" y1="21" x2="16.65" y2="16.65" />
-          </svg>
-          <input
-            className="input pl-10"
-            placeholder="Search jobs..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-        </div>
-        <Link href="/create" className="btn btn-primary shrink-0">
-          + Submit Idea
-        </Link>
-      </div>
+      {/* Two-column layout */}
+      <div className="flex gap-6 items-start">
+        {/* ── Left: Feed ── */}
+        <div className="flex-1 min-w-0">
+          {/* Search */}
+          <div className="mb-3">
+            <SearchBar value={search} onChange={(v) => setSearch(v)} />
+          </div>
 
-      {/* Filter Pills */}
-      <div className="flex gap-1.5 mb-6 flex-wrap">
-        {["", "pending", "plan_ready", "approved", "running", "complete"].map((s) => (
-          <button
-            key={s}
-            onClick={() => setFilter(s)}
-            className={`btn btn-sm ${filter === s
-              ? "btn-primary"
-              : "btn-ghost border border-[var(--border)]"
-              }`}
-          >
-            {s ? s.replace("_", " ") : "All"}
-            {s && data && (
-              <span className="ml-1 opacity-60">
-                {data.jobs.filter(j => s ? j.status === s : true).length}
-              </span>
-            )}
-          </button>
-        ))}
-      </div>
+          {/* Sort bar */}
+          <div className="sort-bar mb-3">
+            {SORTS.map(s => (
+              <button
+                key={s.key}
+                className={`sort-btn ${sort === s.key ? "active" : ""}`}
+                onClick={() => setSort(s.key)}
+              >
+                <span>{s.icon}</span>
+                <span>{s.label}</span>
+              </button>
+            ))}
+            <div style={{ flex: 1 }} />
+            <a href="/create" className="btn btn-primary btn-sm">+ Submit Idea</a>
+          </div>
 
-      {/* Error */}
-      {error && (
-        <div className="card border-[var(--red)] text-[var(--red)] mb-4 flex items-center justify-between">
-          <span>{error}</span>
-          <button onClick={loadJobs} className="btn btn-sm btn-outline">
-            Retry
-          </button>
-        </div>
-      )}
+          {/* Status filter tabs */}
+          <div className="tab-group">
+            {STATUS_TABS.map(t => (
+              <button
+                key={t.key}
+                className={`tab ${status === t.key ? "tab-active" : ""}`}
+                onClick={() => setStatus(t.key)}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
 
-      {/* Jobs List */}
-      {loading ? (
-        <div className="text-center text-[var(--text-muted)] py-16">
-          <div className="inline-block w-5 h-5 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin mb-3" />
-          <p>Loading jobs...</p>
-        </div>
-      ) : !filteredJobs || filteredJobs.length === 0 ? (
-        <div className="text-center py-16 animate-fade-in">
-          <div className="text-4xl mb-4">🛠️</div>
-          <p className="text-[var(--text-muted)] mb-4">
-            {search ? "No jobs match your search." : "No jobs yet."}
-          </p>
-          <Link href="/create" className="btn btn-primary btn-lg">
-            Submit the first idea →
-          </Link>
-        </div>
-      ) : (
-        <div className="flex flex-col gap-2.5 stagger-enter">
-          {filteredJobs.map((job) => (
-            <Link key={job.id} href={`/job/${job.id}`}>
-              <div className="card card-interactive flex items-start gap-4 group">
-                {/* Output type icon */}
-                <div className={`output-icon output-icon-${job.output_type}`}>
-                  {OUTPUT_ICONS[job.output_type] || "📄"}
-                </div>
-
-                {/* Content */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2.5 mb-1">
-                    <h3 className="font-semibold truncate group-hover:text-[var(--accent-hover)] transition-colors">
-                      {job.title}
-                    </h3>
-                    <span className={`badge badge-${job.status}`}>
-                      {job.status === "running" && <span className="live-dot mr-1" />}
-                      {job.status.replace("_", " ")}
-                    </span>
-                  </div>
-                  <p className="text-sm text-[var(--text-muted)] line-clamp-1 mb-2">
-                    {job.description}
-                  </p>
-                  <div className="flex items-center gap-3 text-xs text-[var(--text-muted)]">
-                    {job.tech_stack?.length > 0 && (
-                      <div className="flex gap-1">
-                        {job.tech_stack.slice(0, 3).map((t) => (
-                          <span key={t} className="tag">{t}</span>
-                        ))}
-                        {job.tech_stack.length > 3 && (
-                          <span className="tag">+{job.tech_stack.length - 3}</span>
-                        )}
-                      </div>
-                    )}
-                    <span>{timeAgo(job.created_at)}</span>
-                    {job.votes && job.votes.length > 0 && (
-                      <span className="flex items-center gap-1">
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
-                        {job.votes[0].count}
-                      </span>
-                    )}
+          {/* Loading */}
+          {loading && (
+            <div className="flex flex-col gap-2 stagger-enter">
+              {[...Array(4)].map((_, i) => (
+                <div key={i} className="job-card" style={{ opacity: 0.5 }}>
+                  <div className="job-card-vote" style={{ background: "var(--surface-2)" }} />
+                  <div className="job-card-content py-4">
+                    <div style={{ height: 12, background: "var(--border)", borderRadius: 4, width: "40%", marginBottom: 10 }} />
+                    <div style={{ height: 20, background: "var(--border)", borderRadius: 4, width: "75%", marginBottom: 8 }} />
+                    <div style={{ height: 12, background: "var(--border)", borderRadius: 4, width: "55%" }} />
                   </div>
                 </div>
+              ))}
+            </div>
+          )}
 
-                {/* Arrow */}
-                <svg className="w-4 h-4 text-[var(--text-muted)] group-hover:text-[var(--accent)] transition-colors shrink-0 mt-1.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M9 18l6-6-6-6" />
-                </svg>
-              </div>
-            </Link>
-          ))}
-        </div>
-      )}
+          {/* Error */}
+          {error && !loading && (
+            <div className="card" style={{ borderColor: "var(--red)", background: "var(--red-dim)" }}>
+              <p className="text-[var(--red)] text-sm">⚠️ {error}</p>
+              <button className="btn btn-outline btn-sm mt-2" onClick={() => fetchJobs(true)}>Retry</button>
+            </div>
+          )}
 
-      {/* Stats footer */}
-      {data && !loading && (
-        <div className="text-center text-xs text-[var(--text-muted)] mt-8 pt-6 border-t border-[var(--border)]">
-          {data.total} total jobs
+          {/* Empty */}
+          {!loading && !error && jobs.length === 0 && (
+            <div className="card text-center py-12">
+              <div className="text-5xl mb-3">🛠️</div>
+              <p className="text-[var(--text-secondary)] mb-4 text-lg font-semibold">No jobs found</p>
+              <p className="text-[var(--text-muted)] text-sm mb-5">
+                {search ? `No results for "${search}"` : "Be the first to submit an idea!"}
+              </p>
+              <a href="/create" className="btn btn-primary">Submit the first idea →</a>
+            </div>
+          )}
+
+          {/* Job cards */}
+          {!loading && jobs.length > 0 && (
+            <div className="flex flex-col gap-2 stagger-enter">
+              {jobs.map(job => (
+                <JobCard
+                  key={job.id}
+                  job={job}
+                  onVote={(id) => setJobs(prev =>
+                    prev.map(j => j.id === id ? { ...j, vote_count: (j.vote_count ?? 0) + 1 } : j)
+                  )}
+                />
+              ))}
+            </div>
+          )}
+
+          {/* Load more / End */}
+          {!loading && jobs.length > 0 && (
+            <div className="flex flex-col items-center gap-2 py-6">
+              {hasMore ? (
+                <button
+                  className="btn btn-outline"
+                  onClick={() => fetchJobs(false)}
+                  disabled={loadingMore}
+                >
+                  {loadingMore ? "Loading…" : "Load More"}
+                </button>
+              ) : (
+                <p className="text-[var(--text-muted)] text-sm">All jobs have been loaded</p>
+              )}
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+              >
+                ↑ Back to top
+              </button>
+            </div>
+          )}
         </div>
-      )}
+
+        {/* ── Right: Sidebar — hidden on small screens ── */}
+        <div className="hidden lg:block w-72 flex-shrink-0 sticky top-20">
+          <Sidebar />
+        </div>
+      </div>
     </div>
   );
 }

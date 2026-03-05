@@ -11,6 +11,7 @@ import { LogViewer } from "@/app/components/LogViewer";
 import { LobbyPanel } from "@/app/components/LobbyPanel";
 import { PlanEditor } from "@/app/components/PlanEditor";
 import { CommentThread } from "@/app/components/CommentThread";
+import { VoteBox } from "@/app/components/VoteBox";
 
 function timeAgo(dateStr: string): string {
     const diff = Date.now() - new Date(dateStr).getTime();
@@ -297,124 +298,152 @@ export default function JobDetailPage() {
                 Back to jobs
             </Link>
 
-            {/* Header */}
-            <div className="flex items-start justify-between gap-4 mb-2">
-                <div>
-                    <div className="flex items-center gap-3 mb-1.5">
-                        <h1 className="text-2xl font-bold tracking-tight">{job.title}</h1>
-                        <StatusBadge status={job.status} />
-                    </div>
-                    <div className="flex items-center gap-3 text-sm text-[var(--text-muted)]">
-                        <span className="tag">{job.output_type}</span>
-                        {job.tech_stack?.length > 0 && (
-                            <div className="flex gap-1">
-                                {job.tech_stack.map(t => <span key={t} className="tag">{t}</span>)}
-                            </div>
-                        )}
-                        <span>{timeAgo(job.created_at)}</span>
-                        {job.vote_count !== undefined && (
-                            <span className="flex items-center gap-1">▲ {job.vote_count}</span>
-                        )}
-                    </div>
-                </div>
-                <button onClick={handleVote} className="btn btn-outline btn-sm shrink-0">
-                    ▲ Vote
-                </button>
-            </div>
+            {/* Two-column layout */}
+            <div className="flex gap-6 items-start">
+                {/* ── Left: Main content ── */}
+                <div className="flex-1 min-w-0">
 
-            {/* GitHub Repo Widget */}
-            {(job.github_repo_id || job.github_repo) && (() => {
-                const repoId = job.github_repo_id || job.github_repo!;
-                return (
-                    <div className="card flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-5 mt-4 border-indigo-500/20">
-                        <div className="flex items-center gap-3">
-                            <div className="w-9 h-9 rounded-lg bg-[var(--surface-2)] flex items-center justify-center border border-[var(--border)] shrink-0">
-                                <svg className="w-5 h-5 text-[var(--text)]" fill="currentColor" viewBox="0 0 24 24">
-                                    <path fillRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" clipRule="evenodd" />
-                                </svg>
+                    {/* Header */}
+                    <div className="flex items-start justify-between gap-4 mb-3">
+                        <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-3 mb-1.5 flex-wrap">
+                                <h1 className="text-2xl font-bold tracking-tight">{job.title}</h1>
+                                <StatusBadge status={job.status} />
                             </div>
-                            <div className="min-w-0">
-                                <div className="text-xs text-[var(--text-muted)] mb-0.5">Repository</div>
-                                <a href={`https://github.com/${repoId}`} target="_blank" rel="noopener noreferrer" className="text-sm text-[var(--accent-hover)] hover:underline font-medium break-all">
-                                    {repoId}
-                                </a>
+                            <div className="flex items-center gap-2 text-sm text-[var(--text-muted)] flex-wrap">
+                                <span className="tag">{job.output_type}</span>
+                                {job.tech_stack?.length > 0 && (
+                                    <div className="flex gap-1 flex-wrap">
+                                        {job.tech_stack.map(t => <span key={t} className="tag">{t}</span>)}
+                                    </div>
+                                )}
+                                <span>posted {timeAgo(job.created_at)}</span>
                             </div>
                         </div>
-                        {(job.status === "running" || job.status === "complete") && (
-                            <a href={`https://github.com/${repoId}/commits/main`} target="_blank" rel="noopener noreferrer" className="btn btn-outline btn-sm">
-                                {job.status === "running" && <span className="live-dot mr-1" />}
-                                View commits →
-                            </a>
+                        <VoteBox jobId={jobId} initialCount={job.vote_count ?? 0} vertical={false} />
+                    </div>
+
+                    {/* GitHub Repo Widget */}
+                    {(job.github_repo_id || job.github_repo) && (() => {
+                        const repoId = job.github_repo_id || job.github_repo!;
+                        return (
+                            <div className="card flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-5 mt-4 border-indigo-500/20">
+                                <div className="flex items-center gap-3">
+                                    <div className="w-9 h-9 rounded-lg bg-[var(--surface-2)] flex items-center justify-center border border-[var(--border)] shrink-0">
+                                        <svg className="w-5 h-5 text-[var(--text)]" fill="currentColor" viewBox="0 0 24 24">
+                                            <path fillRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" clipRule="evenodd" />
+                                        </svg>
+                                    </div>
+                                    <div className="min-w-0">
+                                        <div className="text-xs text-[var(--text-muted)] mb-0.5">Repository</div>
+                                        <a href={`https://github.com/${repoId}`} target="_blank" rel="noopener noreferrer" className="text-sm text-[var(--accent-hover)] hover:underline font-medium break-all">
+                                            {repoId}
+                                        </a>
+                                    </div>
+                                </div>
+                                {(job.status === "running" || job.status === "complete") && (
+                                    <a href={`https://github.com/${repoId}/commits/main`} target="_blank" rel="noopener noreferrer" className="btn btn-outline btn-sm">
+                                        {job.status === "running" && <span className="live-dot mr-1" />}
+                                        View commits →
+                                    </a>
+                                )}
+                            </div>
+                        );
+                    })()}
+
+                    {/* Action Message */}
+                    {actionMessage && (
+                        <div className="card mb-4 text-sm whitespace-pre-wrap border-[var(--accent)]/30 bg-[var(--accent-dim)]">
+                            {actionMessage}
+                            <button onClick={() => setActionMessage("")} className="ml-3 text-[var(--text-muted)] hover:text-white text-xs">✕</button>
+                        </div>
+                    )}
+
+                    {/* Actions Bar */}
+                    <div className="flex gap-2 mb-5 flex-wrap">
+                        {(job.status === "pending" || job.status === "plan_ready") && (
+                            <button onClick={handleGeneratePlan} disabled={generatingPlan} className="btn btn-primary">
+                                {generatingPlan ? (
+                                    <><span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />Generating...</>
+                                ) : "🧠 Generate Plan"}
+                            </button>
+                        )}
+                        {job.status === "plan_ready" && (
+                            <button onClick={handleApprove} className="btn btn-primary">
+                                ✅ Approve Plan
+                            </button>
+                        )}
+                        {(job.status === "running" || job.status === "approved") && (
+                            <button onClick={handleMarkComplete} className="btn btn-outline">
+                                🏁 Mark Complete
+                            </button>
+                        )}
+                        {job.status !== "complete" && job.status !== "cancelled" && (
+                            <button onClick={handleDelete} className="btn btn-danger btn-sm">
+                                Cancel
+                            </button>
                         )}
                     </div>
-                );
-            })()}
 
-            {/* Action Message */}
-            {actionMessage && (
-                <div className="card mb-4 text-sm whitespace-pre-wrap border-[var(--accent)]/30 bg-[var(--accent-dim)]">
-                    {actionMessage}
-                    <button onClick={() => setActionMessage("")} className="ml-3 text-[var(--text-muted)] hover:text-white text-xs">✕</button>
-                </div>
-            )}
+                    {/* Tabs */}
+                    <TabGroup tabs={tabs} active={activeTab} onChange={setActiveTab} />
 
-            {/* Actions Bar */}
-            <div className="flex gap-2 mb-5 flex-wrap">
-                {(job.status === "pending" || job.status === "plan_ready") && (
-                    <button onClick={handleGeneratePlan} disabled={generatingPlan} className="btn btn-primary">
-                        {generatingPlan ? (
-                            <><span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />Generating...</>
-                        ) : "🧠 Generate Plan"}
-                    </button>
-                )}
-                {job.status === "plan_ready" && (
-                    <button onClick={handleApprove} className="btn btn-primary">
-                        ✅ Approve Plan
-                    </button>
-                )}
-                {(job.status === "running" || job.status === "approved") && (
-                    <button onClick={handleMarkComplete} className="btn btn-outline">
-                        🏁 Mark Complete
-                    </button>
-                )}
-                {job.status !== "complete" && job.status !== "cancelled" && (
-                    <button onClick={handleDelete} className="btn btn-danger btn-sm">
-                        Cancel
-                    </button>
-                )}
-            </div>
+                    {/* Tab Content */}
+                    <div className="min-h-[300px]">
+                        {activeTab === "overview" && (
+                            <div className="flex flex-col gap-5 animate-fade-in">
+                                <div className="card">
+                                    <div className="section-title">Description</div>
+                                    <p className="text-sm leading-relaxed whitespace-pre-wrap text-[var(--text-secondary)]">
+                                        {job.description}
+                                    </p>
+                                    {job.constraints && (
+                                        <>
+                                            <div className="section-title mt-5">Constraints</div>
+                                            <p className="text-sm text-[var(--text-muted)]">{job.constraints}</p>
+                                        </>
+                                    )}
+                                    {job.examples && (
+                                        <>
+                                            <div className="section-title mt-5">Examples</div>
+                                            <p className="text-sm text-[var(--text-muted)]">{job.examples}</p>
+                                        </>
+                                    )}
+                                </div>
 
-            {/* Tabs */}
-            <TabGroup tabs={tabs} active={activeTab} onChange={setActiveTab} />
+                                {/* Read-only plan preview for non-plan_ready */}
+                                {plan?.plan_ready && job.status !== "plan_ready" && (
+                                    <PlanEditor
+                                        plan={plan}
+                                        editable={false}
+                                        editingPrompt={editingPrompt}
+                                        setEditingPrompt={setEditingPrompt}
+                                        editingTaskList={editingTaskList}
+                                        setEditingTaskList={setEditingTaskList}
+                                        editingRoles={editingRoles}
+                                        setEditingRoles={setEditingRoles}
+                                        newRole={newRole}
+                                        setNewRole={setNewRole}
+                                        newTaskItem={newTaskItem}
+                                        setNewTaskItem={setNewTaskItem}
+                                        onSavePlan={handleSavePlan}
+                                        savingPlan={savingPlan}
+                                        onSaveRoles={handleSaveRoles}
+                                        savingRoles={savingRoles}
+                                        onAddRole={() => {
+                                            if (newRole.trim()) { setEditingRoles([...editingRoles, newRole.trim()]); setNewRole(""); }
+                                        }}
+                                        onRemoveRole={(i) => { if (editingRoles[i] !== "lead") setEditingRoles(editingRoles.filter((_, j) => j !== i)); }}
+                                        agentCount={job.required_agent_count || 1}
+                                    />
+                                )}
+                            </div>
+                        )}
 
-            {/* Tab Content */}
-            <div className="min-h-[300px]">
-                {activeTab === "overview" && (
-                    <div className="flex flex-col gap-5 animate-fade-in">
-                        <div className="card">
-                            <div className="section-title">Description</div>
-                            <p className="text-sm leading-relaxed whitespace-pre-wrap text-[var(--text-secondary)]">
-                                {job.description}
-                            </p>
-                            {job.constraints && (
-                                <>
-                                    <div className="section-title mt-5">Constraints</div>
-                                    <p className="text-sm text-[var(--text-muted)]">{job.constraints}</p>
-                                </>
-                            )}
-                            {job.examples && (
-                                <>
-                                    <div className="section-title mt-5">Examples</div>
-                                    <p className="text-sm text-[var(--text-muted)]">{job.examples}</p>
-                                </>
-                            )}
-                        </div>
-
-                        {/* Read-only plan preview for non-plan_ready */}
-                        {plan?.plan_ready && job.status !== "plan_ready" && (
+                        {activeTab === "plan" && (
                             <PlanEditor
                                 plan={plan}
-                                editable={false}
+                                editable={job.status === "plan_ready"}
                                 editingPrompt={editingPrompt}
                                 setEditingPrompt={setEditingPrompt}
                                 editingTaskList={editingTaskList}
@@ -436,59 +465,108 @@ export default function JobDetailPage() {
                                 agentCount={job.required_agent_count || 1}
                             />
                         )}
+
+                        {activeTab === "team" && (
+                            <LobbyPanel
+                                job={job}
+                                contributors={contributors}
+                                onContribute={handleContribute}
+                                onToggleReady={handleToggleReady}
+                            />
+                        )}
+
+                        {activeTab === "execution" && (
+                            <div className="flex flex-col gap-6">
+                                {tasks.length > 0 && <TaskBoard tasks={tasks} />}
+                                <LogViewer logs={logs} />
+                            </div>
+                        )}
+
+                        {activeTab === "discussion" && (
+                            <CommentThread
+                                jobId={jobId}
+                                initialComments={comments}
+                            />
+                        )}
                     </div>
-                )}
 
-                {activeTab === "plan" && (
-                    <PlanEditor
-                        plan={plan}
-                        editable={job.status === "plan_ready"}
-                        editingPrompt={editingPrompt}
-                        setEditingPrompt={setEditingPrompt}
-                        editingTaskList={editingTaskList}
-                        setEditingTaskList={setEditingTaskList}
-                        editingRoles={editingRoles}
-                        setEditingRoles={setEditingRoles}
-                        newRole={newRole}
-                        setNewRole={setNewRole}
-                        newTaskItem={newTaskItem}
-                        setNewTaskItem={setNewTaskItem}
-                        onSavePlan={handleSavePlan}
-                        savingPlan={savingPlan}
-                        onSaveRoles={handleSaveRoles}
-                        savingRoles={savingRoles}
-                        onAddRole={() => {
-                            if (newRole.trim()) { setEditingRoles([...editingRoles, newRole.trim()]); setNewRole(""); }
-                        }}
-                        onRemoveRole={(i) => { if (editingRoles[i] !== "lead") setEditingRoles(editingRoles.filter((_, j) => j !== i)); }}
-                        agentCount={job.required_agent_count || 1}
-                    />
-                )}
+                </div>{/* end left col */}
 
-                {activeTab === "team" && (
-                    <LobbyPanel
-                        job={job}
-                        contributors={contributors}
-                        onContribute={handleContribute}
-                        onToggleReady={handleToggleReady}
-                    />
-                )}
-
-                {activeTab === "execution" && (
-                    <div className="flex flex-col gap-6">
-                        {tasks.length > 0 && <TaskBoard tasks={tasks} />}
-                        <LogViewer logs={logs} />
+                {/* ── Right: Job Info Sidebar ── */}
+                <div className="hidden lg:flex flex-col gap-3 w-64 flex-shrink-0 sticky top-20">
+                    {/* Status */}
+                    <div className="sidebar-widget">
+                        <div className="sidebar-widget-header">📋 Job Info</div>
+                        <div className="sidebar-widget-body" style={{ padding: "10px 12px" }}>
+                            <div className="flex items-center justify-between py-1.5 text-sm border-b border-[var(--border)]">
+                                <span className="text-[var(--text-muted)]">Status</span>
+                                <StatusBadge status={job.status} />
+                            </div>
+                            <div className="flex items-center justify-between py-1.5 text-sm border-b border-[var(--border)]">
+                                <span className="text-[var(--text-muted)]">Type</span>
+                                <span className="text-xs font-medium">{job.output_type}</span>
+                            </div>
+                            <div className="flex items-center justify-between py-1.5 text-sm border-b border-[var(--border)]">
+                                <span className="text-[var(--text-muted)]">Votes</span>
+                                <span className="text-xs font-bold text-[var(--vote-up)]">▲ {job.vote_count ?? 0}</span>
+                            </div>
+                            <div className="flex items-center justify-between py-1.5 text-sm border-b border-[var(--border)]">
+                                <span className="text-[var(--text-muted)]">Contributors</span>
+                                <span className="text-xs font-medium">{contributors.length}</span>
+                            </div>
+                            <div className="flex items-center justify-between py-1.5 text-sm border-b border-[var(--border)]">
+                                <span className="text-[var(--text-muted)]">Tasks</span>
+                                <span className="text-xs font-medium">{tasks.length}</span>
+                            </div>
+                            <div className="flex items-center justify-between py-1.5 text-sm">
+                                <span className="text-[var(--text-muted)]">Comments</span>
+                                <span className="text-xs font-medium">{comments.length}</span>
+                            </div>
+                        </div>
                     </div>
-                )}
 
-                {activeTab === "discussion" && (
-                    <CommentThread
-                        comments={comments}
-                        onPost={handlePostComment}
-                        posting={postingComment}
-                    />
-                )}
-            </div>
+                    {/* Tech stack */}
+                    {job.tech_stack && job.tech_stack.length > 0 && (
+                        <div className="sidebar-widget">
+                            <div className="sidebar-widget-header">🛠️ Tech Stack</div>
+                            <div className="sidebar-widget-body flex flex-wrap gap-1">
+                                {job.tech_stack.map(t => <span key={t} className="tag tag-accent">{t}</span>)}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Required roles */}
+                    {job.required_roles && job.required_roles.length > 0 && (
+                        <div className="sidebar-widget">
+                            <div className="sidebar-widget-header">👥 Required Roles</div>
+                            <div className="sidebar-widget-body flex flex-col gap-1">
+                                {job.required_roles.map(r => (
+                                    <div key={r} className="flex items-center gap-2">
+                                        <div className="w-1.5 h-1.5 rounded-full bg-[var(--accent)]" />
+                                        <span className="text-sm">{r}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* GitHub link */}
+                    {job.github_repo_id && (
+                        <a
+                            href={`https://github.com/${job.github_repo_id}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="btn btn-outline w-full"
+                        >
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 0C5.374 0 0 5.373 0 12c0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23A11.509 11.509 0 0112 5.803c1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576C20.566 21.797 24 17.3 24 12c0-6.627-5.373-12-12-12z" />
+                            </svg>
+                            View on GitHub
+                        </a>
+                    )}
+                </div>
+
+            </div>{/* end two-col */}
         </div>
     );
 }

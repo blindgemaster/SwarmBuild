@@ -1,4 +1,5 @@
 "use client";
+// Phase 4: Reddit-style two-column create layout with posting guidelines sidebar
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
