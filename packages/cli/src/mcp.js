@@ -184,35 +184,94 @@ export async function runMCPServer(relayUrl, workerToken, workspacePath) {
                     }
 
                     // Prefer HTTPS token push (GitHub MCP approach — reliable on all platforms,
-                    // no SSH key required). Fall back to SSH if no token is available.
+                    // no SSH key required). Fall back to SSH deploy key if present. Skip if neither.
                     const githubToken = process.env.GITHUB_TOKEN || process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
 
-                    let pushed = false;
-                    let lastError = "";
-                    for (let attempt = 1; attempt <= 3; attempt++) {
-                        try {
-                            // Pull first to absorb other agents' commits before pushing
-                            try { await runGitCommand("git pull --rebase origin main", workspacePath); } catch { /* remote may be empty on first push */ }
+                    // Check whether git remote exists at all
+                    let hasRemote = false;
+                    try {
+                        await exec("git remote get-url origin", { cwd: workspacePath });
+                        hasRemote = true;
+                    } catch {
+                        // No remote configured — nothing to push
+                    }
 
-                            if (githubToken) {
-                                // HTTPS token push: same mechanism as GitHub MCP push_files
-                                await pushViaToken(githubToken, workspacePath);
-                            } else {
-                                // SSH fallback (requires deploy key to be configured)
-                                await runGitCommand("git push origin main", workspacePath);
+                    if (!hasRemote) {
+                        gitStatus = "No git remote configured — skipping push.";
+                    } else if (!githubToken) {
+                        // Check if deploy key was written by setupWorkspace
+                        const keyPath = path.join(workspacePath, ".deploy_key");
+                        let hasKey = false;
+                        try { await fs.access(keyPath); hasKey = true; } catch { /* no key */ }
+
+                        if (!hasKey) {
+                            // Neither token nor SSH key — skip silently rather than failing
+                            gitStatus = "Skipped git push: no GITHUB_TOKEN set. Set GITHUB_TOKEN in your environment to enable automatic pushes.";
+                        } else {
+                            // SSH deploy key present — try 3x
+                            let pushed = false, lastError = "";
+                            for (let attempt = 1; attempt <= 3; attempt++) {
+                                try {
+                                    try { await runGitCommand("git pull --rebase origin main", workspacePath); } catch { /* empty repo */ }
+                                    await runGitCommand("git push origin main", workspacePath);
+                                    pushed = true;
+                                    break;
+                                } catch (e) {
+                                    lastError = e.message || String(e);
+                                    await new Promise(r => setTimeout(r, attempt * 2000));
+                                }
                             }
-                            pushed = true;
-                            break;
-                        } catch (e) {
-                            lastError = e.message || String(e);
-                            await new Promise(r => setTimeout(r, attempt * 2000));
+                            gitStatus = pushed
+                                ? "Successfully pushed your code to GitHub for other agents."
+                                : `Git push failed (SSH): ${lastError}`;
+                        }
+                    } else {
+                        // Token available — use HTTPS push (most reliable)
+                        let pushed = false, lastError = "";
+                        for (let attempt = 1; attempt <= 3; attempt++) {
+                            try {
+                                try { await runGitCommand("git pull --rebase origin main", workspacePath); } catch { /* empty repo */ }
+                                await pushViaToken(githubToken, workspacePath);
+                                pushed = true;
+                                break;
+                            } catch (e) {
+                                lastError = e.message || String(e);
+                                await new Promise(r => setTimeout(r, attempt * 2000));
+                            }
+                        }
+
+                        // If token push failed, try SSH deploy key as fallback
+                        // (token may lack write access to the job org but deploy key always has it)
+                        if (!pushed) {
+                            const keyPath = path.join(workspacePath, ".deploy_key");
+                            let hasKey = false;
+                            try { await fs.access(keyPath); hasKey = true; } catch { /* no key */ }
+
+                            if (hasKey) {
+                                let sshPushed = false, sshError = "";
+                                for (let attempt = 1; attempt <= 3; attempt++) {
+                                    try {
+                                        try { await runGitCommand("git pull --rebase origin main", workspacePath); } catch { /* empty repo */ }
+                                        await runGitCommand("git push origin main", workspacePath);
+                                        sshPushed = true;
+                                        break;
+                                    } catch (e) {
+                                        sshError = e.message || String(e);
+                                        await new Promise(r => setTimeout(r, attempt * 2000));
+                                    }
+                                }
+                                gitStatus = sshPushed
+                                    ? "Successfully pushed via deploy key (token had no org access)."
+                                    : `Git push failed — token: ${lastError} | SSH: ${sshError}`;
+                            } else {
+                                gitStatus = `Git push failed (token): ${lastError}`;
+                            }
+                        } else {
+                            gitStatus = "Successfully pushed your code to GitHub for other agents.";
                         }
                     }
-                    if (!pushed) {
-                        throw new Error(lastError || "Failed to push after 3 attempts");
-                    }
 
-                    gitStatus = "Successfully pushed your code to GitHub for other agents.";
+
                 } catch (err) {
                     gitStatus = `Git push failed: ${err.message}`;
                     console.error("[MCP] Git Push Error:", err.message);
