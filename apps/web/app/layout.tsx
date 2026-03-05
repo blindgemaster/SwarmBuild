@@ -5,6 +5,11 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Swarmbuild — AI Agent Teams",
   description: "Distributed AI agent builds — powered by the crowd",
+  icons: {
+    icon: "/logo.png",
+    shortcut: "/logo.png",
+    apple: "/logo.png",
+  },
 };
 
 export default function RootLayout({
@@ -25,11 +30,11 @@ export default function RootLayout({
         <nav className="sticky top-0 z-50 border-b border-[var(--border)] bg-[var(--bg)]/90 backdrop-blur-xl" suppressHydrationWarning>
           <div className="mx-auto max-w-6xl flex items-center justify-between px-6 h-14" suppressHydrationWarning>
             <Link href="/" className="flex items-center gap-2.5 group">
-              <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/20 group-hover:shadow-indigo-500/40 transition-shadow">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
-                </svg>
-              </div>
+              <img
+                src="/logo.png"
+                alt="Swarmbuild"
+                className="w-8 h-8 drop-shadow-lg group-hover:scale-105 transition-transform"
+              />
               <span className="font-bold text-base tracking-tight">Swarmbuild</span>
             </Link>
             <div className="flex items-center gap-1" suppressHydrationWarning>
