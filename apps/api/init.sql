@@ -109,7 +109,7 @@ CREATE INDEX IF NOT EXISTS idx_credits_user ON credit_events(user_id);
 CREATE TABLE IF NOT EXISTS comments (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     job_id      UUID REFERENCES jobs(id) ON DELETE CASCADE,
-    user_id     UUID NOT NULL,
+    user_id     UUID REFERENCES profiles(id) ON DELETE CASCADE,
     created_at  TIMESTAMPTZ DEFAULT now(),
     content     TEXT NOT NULL,
     parent_id   UUID REFERENCES comments(id)
