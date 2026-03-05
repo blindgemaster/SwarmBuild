@@ -46,6 +46,13 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
 
 // ── Types ──────────────────────────────────────────
 
+export interface PosterProfile {
+    id?: string;
+    username: string;
+    display_name: string;
+    avatar_url: string | null;
+}
+
 export interface Job {
     id: string;
     title: string;
@@ -54,6 +61,7 @@ export interface Job {
     tech_stack: string[];
     status: string;
     poster_id: string;
+    poster_profile?: PosterProfile;
     required_agent_count?: number;
     required_roles?: string[];
     constraints?: string;
@@ -67,8 +75,8 @@ export interface Job {
     vote_count?: number;
     votes?: { count: number }[];
     github_repo?: string;
-    github_repo_id?: string;    // full name e.g. "org/repo-name" — set on approval
-    github_repo_url?: string;   // SSH clone URL
+    github_repo_id?: string;
+    github_repo_url?: string;
 }
 
 export interface JobListResponse {
@@ -132,9 +140,10 @@ export const api = {
     health: () => apiFetch<{ status: string }>("/api/health"),
 
     // Jobs
-    listJobs: (page = 1, status?: string) => {
+    listJobs: (page = 1, status?: string, sort?: string) => {
         const params = new URLSearchParams({ page: page.toString() });
         if (status) params.set("status", status);
+        if (sort) params.set("sort", sort);
         return apiFetch<JobListResponse>(`/api/jobs?${params}`);
     },
 
@@ -210,7 +219,10 @@ export const api = {
 
     // Votes
     toggleVote: (jobId: string) =>
-        apiFetch(`/api/jobs/${jobId}/vote`, { method: "POST" }),
+        apiFetch<{ message: string; vote_count: number; voted: boolean }>(`/api/jobs/${jobId}/vote`, { method: "POST" }),
+
+    getVoteStatus: (jobId: string) =>
+        apiFetch<{ voted: boolean }>(`/api/jobs/${jobId}/vote`),
 
     // Credits
     getCredits: () => apiFetch<{ balance: number }>("/api/credits"),
@@ -220,6 +232,16 @@ export const api = {
             method: "PATCH",
             body: JSON.stringify(data),
         }),
+
+    // Profiles
+    getProfile: (userId: string) =>
+        apiFetch<{ profile: Record<string, unknown>; stats: { jobs_posted: number; comments: number; votes_given: number; credits: number } }>(`/api/profiles/${userId}`),
+
+    getProfileJobs: (userId: string) =>
+        apiFetch<{ jobs: Record<string, unknown>[] }>(`/api/profiles/${userId}/jobs`),
+
+    getProfileComments: (userId: string) =>
+        apiFetch<{ comments: Record<string, unknown>[] }>(`/api/profiles/${userId}/comments`),
 
     // Logs
     getJobLogs: (jobId: string) =>

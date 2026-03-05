@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, Job, PlanResponse, Comment, Contributor, Task } from "@/lib/api";
+import { useAuth } from "@/app/components/AuthProvider";
 import { StatusBadge } from "@/app/components/StatusBadge";
 import { TabGroup } from "@/app/components/TabGroup";
 import { TaskBoard } from "@/app/components/TaskBoard";
@@ -26,6 +27,7 @@ function timeAgo(dateStr: string): string {
 export default function JobDetailPage() {
     const params = useParams();
     const router = useRouter();
+    const { user } = useAuth();
     const jobId = params.id as string;
 
     const [job, setJob] = useState<Job | null>(null);
@@ -41,7 +43,9 @@ export default function JobDetailPage() {
     // Action states
     const [generatingPlan, setGeneratingPlan] = useState(false);
     const [actionMessage, setActionMessage] = useState("");
-    const [postingComment, setPostingComment] = useState(false);
+    const [approvingJob, setApprovingJob] = useState(false);
+    const [completingJob, setCompletingJob] = useState(false);
+    const [cancellingJob, setCancellingJob] = useState(false);
 
     // Plan/Role editing states
     const [editingRoles, setEditingRoles] = useState<string[]>([]);
@@ -104,29 +108,61 @@ export default function JobDetailPage() {
             if (data.logs?.length) setLogs(data.logs);
         }).catch(() => { });
 
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+        // Polling fallback — refresh data every 8 seconds for reliable realtime
+        const pollInterval = setInterval(() => { loadJob(); }, 8000);
+
+        // WebSocket for instant updates (best-effort, with reconnection)
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || "https://swarmbuild.onrender.com";
         const wsUrl = apiUrl.replace(/^http/, "ws");
-        const ws = new WebSocket(`${wsUrl}/api/jobs/${jobId}/lobby/ws`);
-        ws.onmessage = (event) => {
-            try {
-                const data = JSON.parse(event.data);
-                if (data.type === "lobby_state_change" || data.type === "new_message" || data.type === "task_updated") {
-                    loadJob();
-                }
-            } catch { }
-        };
+        let ws: WebSocket | null = null;
+        let logWs: WebSocket | null = null;
+        let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-        const logWs = new WebSocket(`${wsUrl}/api/logs/${jobId}`);
-        logWs.onmessage = (event) => {
+        function connectLobbyWs() {
             try {
-                const data = JSON.parse(event.data);
-                if (data.type === "log" && data.content) {
-                    setLogs(prev => [...prev, data.content].slice(-200));
-                }
+                ws = new WebSocket(`${wsUrl}/api/jobs/${jobId}/lobby/ws`);
+                ws.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        if (data.type === "lobby_state_change" || data.type === "new_message" || data.type === "task_updated") {
+                            loadJob();
+                        }
+                    } catch { }
+                };
+                ws.onclose = () => {
+                    reconnectTimer = setTimeout(connectLobbyWs, 5000);
+                };
+                ws.onerror = () => { ws?.close(); };
             } catch { }
-        };
+        }
 
-        return () => { ws.close(); logWs.close(); };
+        function connectLogWs() {
+            try {
+                logWs = new WebSocket(`${wsUrl}/api/logs/${jobId}`);
+                logWs.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        if (data.type === "log" && data.content) {
+                            setLogs(prev => [...prev, data.content].slice(-200));
+                        }
+                    } catch { }
+                };
+                logWs.onclose = () => {
+                    setTimeout(connectLogWs, 5000);
+                };
+                logWs.onerror = () => { logWs?.close(); };
+            } catch { }
+        }
+
+        connectLobbyWs();
+        connectLogWs();
+
+        return () => {
+            clearInterval(pollInterval);
+            if (reconnectTimer) clearTimeout(reconnectTimer);
+            ws?.close();
+            logWs?.close();
+        };
     }, [loadJob, jobId]);
 
     // ── Handlers ────────────────────
@@ -170,6 +206,7 @@ export default function JobDetailPage() {
     }
 
     async function handleApprove() {
+        setApprovingJob(true);
         try {
             await api.approveJob(jobId);
             setActionMessage("Job approved! Contributors can now join.");
@@ -177,27 +214,30 @@ export default function JobDetailPage() {
             loadJob();
         } catch (e: unknown) {
             setActionMessage(e instanceof Error ? e.message : "Failed");
-        }
+        } finally { setApprovingJob(false); }
     }
 
     async function handleMarkComplete() {
         if (!confirm("Mark this job as complete?")) return;
+        setCompletingJob(true);
         try {
             await api.completeJob(jobId);
             setActionMessage("Job marked complete!");
             loadJob();
         } catch (e: unknown) {
             setActionMessage(e instanceof Error ? e.message : "Failed");
-        }
+        } finally { setCompletingJob(false); }
     }
 
     async function handleDelete() {
         if (!confirm("Cancel this job?")) return;
+        setCancellingJob(true);
         try {
             await api.deleteJob(jobId);
             router.push("/");
         } catch (e: unknown) {
             setActionMessage(e instanceof Error ? e.message : "Failed");
+            setCancellingJob(false);
         }
     }
 
@@ -225,7 +265,7 @@ export default function JobDetailPage() {
 
     async function handleContribute(role: string) {
         try {
-            const result: any = await api.contribute(jobId, role);
+            const result = await api.contribute(jobId, role) as Record<string, string>;
             if (result.worker_token) {
                 setActionMessage(`Joined! CLI command:\n${result.cli_command}`);
             }
@@ -235,25 +275,9 @@ export default function JobDetailPage() {
         }
     }
 
-    async function handleVote() {
-        try { await api.toggleVote(jobId); loadJob(); }
-        catch (e: unknown) { setActionMessage(e instanceof Error ? e.message : "Failed"); }
-    }
-
     async function handleToggleReady(isReady: boolean) {
         try { await api.toggleReady(jobId, isReady); loadJob(); }
         catch (e: unknown) { setActionMessage(e instanceof Error ? e.message : "Failed"); }
-    }
-
-    async function handlePostComment(content: string) {
-        setPostingComment(true);
-        try {
-            await api.addComment(jobId, content);
-            const commentsData = await api.getComments(jobId);
-            setComments(commentsData.comments || []);
-        } catch (e: unknown) {
-            setActionMessage(e instanceof Error ? e.message : "Failed");
-        } finally { setPostingComment(false); }
     }
 
     // ── Render ──────────────────────
@@ -311,12 +335,15 @@ export default function JobDetailPage() {
                                 <StatusBadge status={job.status} />
                             </div>
                             <div className="flex items-center gap-2 text-sm text-[var(--text-muted)] flex-wrap">
+                                <Link href={`/profile/${job.poster_id}`} className="font-medium text-[var(--text)] hover:text-[var(--accent)] transition-colors">{job.poster_profile?.display_name || job.poster_profile?.username || "Anonymous"}</Link>
+                                <span>·</span>
                                 <span className="tag">{job.output_type}</span>
                                 {job.tech_stack?.length > 0 && (
                                     <div className="flex gap-1 flex-wrap">
                                         {job.tech_stack.map(t => <span key={t} className="tag">{t}</span>)}
                                     </div>
                                 )}
+                                <span>·</span>
                                 <span>posted {timeAgo(job.created_at)}</span>
                             </div>
                         </div>
@@ -354,36 +381,70 @@ export default function JobDetailPage() {
                     {/* Action Message */}
                     {actionMessage && (
                         <div className="card mb-4 text-sm whitespace-pre-wrap border-[var(--accent)]/30 bg-[var(--accent-dim)]">
-                            {actionMessage}
-                            <button onClick={() => setActionMessage("")} className="ml-3 text-[var(--text-muted)] hover:text-white text-xs">✕</button>
+                            <div className="flex items-start justify-between gap-2">
+                                <span className="flex-1">{actionMessage}</span>
+                                <div className="flex items-center gap-1 shrink-0">
+                                    {actionMessage.includes("npx swarmbuild") && (
+                                        <button
+                                            onClick={() => {
+                                                const cmd = actionMessage.split("\n").find((l: string) => l.includes("npx swarmbuild"));
+                                                if (cmd) navigator.clipboard.writeText(cmd.trim());
+                                            }}
+                                            className="text-[var(--accent)] hover:text-white text-xs px-2 py-1 rounded border border-[var(--border)] hover:bg-[var(--surface-2)] transition-colors"
+                                            title="Copy CLI command"
+                                        >
+                                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                                        </button>
+                                    )}
+                                    <button onClick={() => setActionMessage("")} className="text-[var(--text-muted)] hover:text-white text-xs px-1">✕</button>
+                                </div>
+                            </div>
                         </div>
                     )}
 
-                    {/* Actions Bar */}
-                    <div className="flex gap-2 mb-5 flex-wrap">
-                        {(job.status === "pending" || job.status === "plan_ready") && (
-                            <button onClick={handleGeneratePlan} disabled={generatingPlan} className="btn btn-primary">
-                                {generatingPlan ? (
-                                    <><span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />Generating...</>
-                                ) : "🧠 Generate Plan"}
-                            </button>
-                        )}
-                        {job.status === "plan_ready" && (
-                            <button onClick={handleApprove} className="btn btn-primary">
-                                ✅ Approve Plan
-                            </button>
-                        )}
-                        {(job.status === "running" || job.status === "approved") && (
-                            <button onClick={handleMarkComplete} className="btn btn-outline">
-                                🏁 Mark Complete
-                            </button>
-                        )}
-                        {job.status !== "complete" && job.status !== "cancelled" && (
-                            <button onClick={handleDelete} className="btn btn-danger btn-sm">
-                                Cancel
-                            </button>
-                        )}
-                    </div>
+                    {/* Actions Bar — poster-only controls */}
+                    {(() => {
+                        const isPoster = user?.id === job.poster_id;
+                        return isPoster ? (
+                            <div className="flex flex-col gap-2 mb-5">
+                                <div className="flex gap-2 flex-wrap">
+                                    {(job.status === "pending" || job.status === "plan_ready") && (
+                                        <button onClick={handleGeneratePlan} disabled={generatingPlan} className="btn btn-primary">
+                                            {generatingPlan ? (
+                                                <><span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />Generating...</>
+                                            ) : "🧠 Generate Plan"}
+                                        </button>
+                                    )}
+                                    {job.status === "plan_ready" && (
+                                        <button onClick={handleApprove} disabled={approvingJob} className="btn btn-primary">
+                                            {approvingJob ? (
+                                                <><span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />Approving...</>
+                                            ) : "✅ Approve Plan"}
+                                        </button>
+                                    )}
+                                    {(job.status === "running" || job.status === "approved") && (
+                                        <button onClick={handleMarkComplete} disabled={completingJob} className="btn btn-outline">
+                                            {completingJob ? (
+                                                <><span className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />Completing...</>
+                                            ) : "🏁 Mark Complete"}
+                                        </button>
+                                    )}
+                                    {job.status !== "complete" && job.status !== "cancelled" && (
+                                        <button onClick={handleDelete} disabled={cancellingJob} className="btn btn-danger btn-sm">
+                                            {cancellingJob ? (
+                                                <><span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />Cancelling...</>
+                                            ) : "Cancel"}
+                                        </button>
+                                    )}
+                                </div>
+                                {(job.status === "pending" || job.status === "plan_ready") && comments.length > 0 && (
+                                    <p className="text-xs text-[var(--text-muted)]">
+                                        Plan generation will include {comments.length} discussion comment{comments.length !== 1 ? "s" : ""} as context.
+                                    </p>
+                                )}
+                            </div>
+                        ) : null;
+                    })()}
 
                     {/* Tabs */}
                     <TabGroup tabs={tabs} active={activeTab} onChange={setActiveTab} />

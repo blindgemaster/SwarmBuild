@@ -85,12 +85,11 @@ async def get_comments(job_id: str):
 # ── Votes ───────────────────────────────────────────
 
 @router.post("/{job_id}/vote")
-async def upvote(job_id: str, request: Request):
-    """Upvote a job."""
+async def toggle_vote(job_id: str, request: Request):
+    """Toggle vote on a job — vote if not voted, unvote if already voted."""
     user_id = await _get_user_id(request)
     db = get_supabase()
 
-    # Check if already voted
     existing = (
         db.table("votes")
         .select("*")
@@ -98,12 +97,14 @@ async def upvote(job_id: str, request: Request):
         .eq("user_id", user_id)
         .execute()
     )
+
     if existing.data:
-        return {"message": "Already voted"}
+        db.table("votes").delete().eq("job_id", job_id).eq("user_id", user_id).execute()
+        action = "removed"
+    else:
+        db.table("votes").insert({"job_id": job_id, "user_id": user_id}).execute()
+        action = "added"
 
-    db.table("votes").insert({"job_id": job_id, "user_id": user_id}).execute()
-
-    # Get new count
     count = (
         db.table("votes")
         .select("user_id", count="exact")
@@ -111,7 +112,24 @@ async def upvote(job_id: str, request: Request):
         .execute()
     )
 
-    return {"message": "Voted", "vote_count": count.count}
+    return {"message": action, "vote_count": count.count, "voted": action == "added"}
+
+
+@router.get("/{job_id}/vote")
+async def get_vote_status(job_id: str, request: Request):
+    """Check if the current user has voted on a job."""
+    user_id = await _get_user_id(request)
+    db = get_supabase()
+
+    existing = (
+        db.table("votes")
+        .select("user_id")
+        .eq("job_id", job_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+
+    return {"voted": len(existing.data) > 0}
 
 
 @router.delete("/{job_id}/vote")

@@ -5,13 +5,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 
-const OUTPUT_TYPES = [
-    { value: "rest-api", label: "REST API", icon: "🌐", desc: "Backend API service" },
-    { value: "cli", label: "CLI Tool", icon: "⚡", desc: "Command-line utility" },
-    { value: "library", label: "Library", icon: "📦", desc: "Reusable package" },
-    { value: "script", label: "Script", icon: "📜", desc: "Standalone script" },
-    { value: "fullstack", label: "Full-Stack", icon: "🚀", desc: "Complete web app" },
-];
+const DEFAULT_OUTPUT_TYPE = "fullstack";
 
 export default function CreateJobPage() {
     const router = useRouter();
@@ -20,7 +14,6 @@ export default function CreateJobPage() {
 
     const [title, setTitle] = useState("");
     const [description, setDescription] = useState("");
-    const [outputType, setOutputType] = useState("rest-api");
     const [techStackTags, setTechStackTags] = useState<string[]>([]);
     const [techInput, setTechInput] = useState("");
     const [agentCount, setAgentCount] = useState(1);
@@ -60,7 +53,7 @@ export default function CreateJobPage() {
             const job = await api.createJob({
                 title: title.trim(),
                 description: description.trim(),
-                output_type: outputType,
+                output_type: DEFAULT_OUTPUT_TYPE,
                 tech_stack: techStackTags,
                 agent_count: agentCount,
                 constraints: constraints.trim() || undefined,
@@ -125,37 +118,14 @@ export default function CreateJobPage() {
                     </div>
                 </div>
 
-                {/* Section 2: Output Type */}
+                {/* Section 2: Team & Stack */}
                 <div className="card">
                     <div className="section-title flex items-center gap-2 mb-4">
                         <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-[var(--accent-dim)] text-[var(--accent)] text-[10px] font-bold">2</span>
-                        Project Type & Stack
+                        Team & Stack
                     </div>
 
                     <div className="flex flex-col gap-4">
-                        <div>
-                            <label className="input-label">Output Type</label>
-                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                                {OUTPUT_TYPES.map((t) => (
-                                    <button
-                                        key={t.value}
-                                        type="button"
-                                        onClick={() => setOutputType(t.value)}
-                                        className={`flex flex-col items-start gap-1 p-3 rounded-lg border transition-all text-left ${outputType === t.value
-                                            ? "border-[var(--accent)] bg-[var(--accent-dim)] shadow-md shadow-indigo-500/10"
-                                            : "border-[var(--border)] bg-[var(--surface-2)] hover:border-[var(--border-hover)]"
-                                            }`}
-                                    >
-                                        <div className="flex items-center gap-2">
-                                            <span className="text-lg">{t.icon}</span>
-                                            <span className="text-sm font-medium">{t.label}</span>
-                                        </div>
-                                        <span className="text-xs text-[var(--text-muted)]">{t.desc}</span>
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-
                         {/* Agent Count */}
                         <div>
                             <label className="input-label">Team Size</label>

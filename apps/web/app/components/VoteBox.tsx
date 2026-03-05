@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { api } from "@/lib/api";
 
 export function VoteBox({
@@ -13,8 +13,12 @@ export function VoteBox({
     vertical?: boolean;
 }) {
     const [count, setCount] = useState(initialCount);
-    const [voted, setVoted] = useState<"up" | null>(null);
+    const [voted, setVoted] = useState(false);
     const [loading, setLoading] = useState(false);
+
+    useEffect(() => {
+        api.getVoteStatus(jobId).then(res => setVoted(res.voted)).catch(() => {});
+    }, [jobId]);
 
     async function handleVote(e: React.MouseEvent) {
         e.stopPropagation();
@@ -22,36 +26,33 @@ export function VoteBox({
         if (loading) return;
         setLoading(true);
         try {
-            await api.toggleVote(jobId);
-            if (voted === "up") {
-                setVoted(null);
-                setCount((c) => c - 1);
-            } else {
-                setVoted("up");
-                setCount((c) => c + 1);
-            }
+            const res = await api.toggleVote(jobId);
+            setVoted(res.voted);
+            setCount(res.vote_count);
         } catch { }
         setLoading(false);
     }
 
     if (vertical) {
         return (
-            <div className="job-card-vote">
+            <div className="job-card-vote" onClick={e => e.stopPropagation()}>
                 <button
-                    className={`vote-btn ${voted === "up" ? "voted-up" : ""}`}
+                    className={`vote-btn ${voted ? "voted-up" : ""}`}
                     onClick={handleVote}
-                    title="Upvote"
+                    title={voted ? "Remove vote" : "Upvote"}
                 >
-                    {/* Up arrow SVG */}
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
                         <path d="M12 4l9 9h-6v7H9v-7H3z" />
                     </svg>
                 </button>
-                <span className={`vote-count ${voted === "up" ? "voted-up" : ""}`}>
+                <span className={`vote-count ${voted ? "voted-up" : ""}`}>
                     {count >= 1000 ? (count / 1000).toFixed(1) + "k" : count}
                 </span>
-                {/* Down arrow (visual only — SwarmBuild has toggle vote API) */}
-                <button className="vote-btn" title="Downvote" onClick={(e) => e.preventDefault()}>
+                <button
+                    className={`vote-btn ${voted ? "" : "voted-down"}`}
+                    title={voted ? "Remove vote" : "Upvote"}
+                    onClick={handleVote}
+                >
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
                         <path d="M12 20l-9-9h6V4h6v7h6z" />
                     </svg>
@@ -60,18 +61,18 @@ export function VoteBox({
         );
     }
 
-    // Horizontal inline variant for detail sidebar
     return (
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
             <button
-                className={`vote-btn ${voted === "up" ? "voted-up" : ""}`}
+                className={`vote-btn ${voted ? "voted-up" : ""}`}
                 onClick={handleVote}
+                title={voted ? "Remove vote" : "Upvote"}
             >
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
                     <path d="M12 4l9 9h-6v7H9v-7H3z" />
                 </svg>
             </button>
-            <span className={`text-lg font-bold ${voted === "up" ? "text-[var(--vote-up)]" : "text-[var(--text-muted)]"}`}>
+            <span className={`text-lg font-bold ${voted ? "text-[var(--vote-up)]" : "text-[var(--text-muted)]"}`}>
                 {count}
             </span>
             <span className="text-xs text-[var(--text-muted)]">votes</span>

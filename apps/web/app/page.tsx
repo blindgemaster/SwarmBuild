@@ -46,7 +46,7 @@ function timeAgo(dateStr: string): string {
 
 // ── JobCard — Reddit-style card with vote sidebar ────────────────────────────
 
-function JobCard({ job, onVote }: { job: Job; onVote: (id: string) => void }) {
+function JobCard({ job }: { job: Job }) {
   const router = useRouter();
 
   return (
@@ -62,6 +62,11 @@ function JobCard({ job, onVote }: { job: Job; onVote: (id: string) => void }) {
       <div className="job-card-content">
         {/* Meta row */}
         <div className="job-card-meta">
+          <span
+            className="font-medium text-[var(--text)] hover:text-[var(--accent)] cursor-pointer transition-colors"
+            onClick={(e) => { e.stopPropagation(); if (job.poster_id) window.location.href = `/profile/${job.poster_id}`; }}
+          >{job.poster_profile?.display_name || job.poster_profile?.username || "Anonymous"}</span>
+          <span>·</span>
           <span>{OUTPUT_ICONS[job.output_type] ?? "📦"} {job.output_type}</span>
           <span>·</span>
           <span>posted {timeAgo(job.created_at)}</span>
@@ -183,7 +188,8 @@ export default function JobBoard() {
     setError(null);
     const pg = reset ? 1 : page;
     try {
-      const data = await api.listJobs(pg, status || undefined);
+      const apiSort = sort === "votes" ? "votes" : sort === "running" ? "running" : "newest";
+      const data = await api.listJobs(pg, status || undefined, apiSort);
       let list = data.jobs;
 
       // Client-side search filter
@@ -196,16 +202,20 @@ export default function JobBoard() {
         );
       }
 
-      // Client-side sort
-      if (sort === "votes") list = [...list].sort((a, b) => (b.vote_count ?? 0) - (a.vote_count ?? 0));
-      if (sort === "running") list = [...list].sort((a, b) => (b.active_contributors ?? 0) - (a.active_contributors ?? 0));
-      // "newest" comes from API default
+      // Client-side sort for votes (API can't sort by aggregated count easily)
+      if (sort === "votes") {
+        list = [...list].sort((a, b) => {
+          const aVotes = a.vote_count ?? (a.votes?.[0]?.count ?? 0);
+          const bVotes = b.vote_count ?? (b.votes?.[0]?.count ?? 0);
+          return bVotes - aVotes;
+        });
+      }
 
       setHasMore(list.length >= PER_PAGE);
       if (reset) { setJobs(list); setPage(2); }
       else { setJobs(prev => [...prev, ...list]); setPage(p => p + 1); }
-    } catch (err: any) {
-      setError(err.message || "Failed to fetch");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to fetch");
     }
     setLoading(false);
     setLoadingMore(false);
@@ -306,9 +316,6 @@ export default function JobBoard() {
                 <JobCard
                   key={job.id}
                   job={job}
-                  onVote={(id) => setJobs(prev =>
-                    prev.map(j => j.id === id ? { ...j, vote_count: (j.vote_count ?? 0) + 1 } : j)
-                  )}
                 />
               ))}
             </div>

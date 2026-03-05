@@ -84,14 +84,35 @@ async def list_jobs(
     # Sort
     if sort == "newest":
         query = query.order("created_at", desc=True)
+    elif sort == "votes":
+        query = query.order("created_at", desc=True)
     elif sort == "running":
-        query = query.eq("status", "running").order("created_at", desc=True)
+        if not status:
+            query = query.eq("status", "running")
+        query = query.order("created_at", desc=True)
 
     # Paginate
     offset = (page - 1) * per_page
     query = query.range(offset, offset + per_page - 1)
 
     result = query.execute()
+
+    # Enrich with poster profiles
+    poster_ids = list({j["poster_id"] for j in result.data if j.get("poster_id")})
+    profiles_by_id: dict = {}
+    if poster_ids:
+        profiles_result = (
+            db.table("profiles")
+            .select("id, username, display_name, avatar_url")
+            .in_("id", poster_ids)
+            .execute()
+        )
+        profiles_by_id = {p["id"]: p for p in profiles_result.data}
+
+    for j in result.data:
+        j["poster_profile"] = profiles_by_id.get(j.get("poster_id")) or {
+            "username": "anonymous", "display_name": "Anonymous", "avatar_url": None
+        }
 
     return {
         "jobs": result.data,
@@ -166,6 +187,20 @@ async def get_job(job_id: str):
 
     job["active_contributors"] = contrib_result.count or 0
     job["vote_count"] = votes_result.count or 0
+
+    # Enrich with poster profile
+    poster_profile = None
+    if job.get("poster_id"):
+        profile_result = (
+            db.table("profiles")
+            .select("id, username, display_name, avatar_url")
+            .eq("id", job["poster_id"])
+            .execute()
+        )
+        poster_profile = profile_result.data[0] if profile_result.data else None
+    job["poster_profile"] = poster_profile or {
+        "username": "anonymous", "display_name": "Anonymous", "avatar_url": None
+    }
 
     return job
 

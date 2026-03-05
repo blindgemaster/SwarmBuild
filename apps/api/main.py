@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from config import get_settings
-from routers import auth, jobs, plans, contributors, worker, logs, credits, community, tasks, messages
+from routers import auth, jobs, plans, contributors, worker, logs, credits, community, tasks, messages, profiles
 
 
 @asynccontextmanager
@@ -57,6 +57,7 @@ app.include_router(messages.router, prefix="/api", tags=["Messages"])
 app.include_router(logs.router, prefix="/api/logs", tags=["Log Relay"])
 app.include_router(credits.router, prefix="/api/credits", tags=["Credits"])
 app.include_router(community.router, prefix="/api/jobs", tags=["Community"])
+app.include_router(profiles.router, prefix="/api/profiles", tags=["Profiles"])
 
 # Dev router — only when DEV_MODE=true
 if get_settings().dev_mode:
