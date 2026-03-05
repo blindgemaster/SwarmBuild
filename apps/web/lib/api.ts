@@ -99,8 +99,10 @@ export interface Comment {
     job_id: string;
     user_id: string;
     content: string;
+    parent_id?: string | null;
     created_at: string;
     profile?: { username: string; display_name: string; avatar_url: string };
+    replies?: Comment[]; // server-side built tree
 }
 
 export interface PlanResponse {
@@ -190,10 +192,10 @@ export const api = {
     getComments: (jobId: string) =>
         apiFetch<{ comments: Comment[] }>(`/api/jobs/${jobId}/comments`),
 
-    addComment: (jobId: string, content: string) =>
+    addComment: (jobId: string, content: string, parentId?: string) =>
         apiFetch(`/api/jobs/${jobId}/comments`, {
             method: "POST",
-            body: JSON.stringify({ content }),
+            body: JSON.stringify({ content, parent_id: parentId || null }),
         }),
 
     // Votes

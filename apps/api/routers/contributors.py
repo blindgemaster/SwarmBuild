@@ -236,24 +236,32 @@ async def list_contributors(job_id: str):
     """List active contributors for a job."""
     db = get_supabase()
 
-    # Enrich with profile data via join
+    # Fetch contributors (no FK join available in schema cache, so we enrich manually)
     result = (
         db.table("contributors")
-        .select("id, user_id, joined_at, last_seen, num_agents, tokens_used, sessions_run, commits_pushed, role, is_ready, profiles(username, display_name, avatar_url)")
+        .select("id, user_id, joined_at, last_seen, num_agents, tokens_used, sessions_run, commits_pushed, role, is_ready")
         .eq("job_id", job_id)
         .is_("left_at", "null")
         .order("joined_at")
         .execute()
     )
 
+    # Batch-fetch profiles for all contributor user_ids
+    user_ids = list({c["user_id"] for c in result.data})
+    profiles_by_id: dict = {}
+    if user_ids:
+        profiles_result = (
+            db.table("profiles")
+            .select("id, username, display_name, avatar_url")
+            .in_("id", user_ids)
+            .execute()
+        )
+        profiles_by_id = {p["id"]: p for p in profiles_result.data}
+
     contributors = []
     for c in result.data:
-        profile = c.pop("profiles", None)
-        contributor_data = {
-            **c,
-            "profile": profile,
-        }
-        contributors.append(contributor_data)
+        profile = profiles_by_id.get(c["user_id"])
+        contributors.append({**c, "profile": profile})
 
     return {
         "contributors": contributors,
