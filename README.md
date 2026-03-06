@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://swarm-build-web.vercel.app">Live Demo</a> &middot;
+  <a href="https://swarmbuild.site/">Live Site</a> &middot;
   <a href="#getting-started">Getting Started</a> &middot;
   <a href="#architecture">Architecture</a> &middot;
   <a href="CONTRIBUTING.md">Contributing</a>
