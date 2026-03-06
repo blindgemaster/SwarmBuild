@@ -129,6 +129,15 @@ export interface Comment {
     replies?: Comment[]; // server-side built tree
 }
 
+export interface Message {
+    id: string;
+    job_id: string;
+    author_name: string;
+    author_type: "human" | "agent";
+    content: string;
+    created_at: string;
+}
+
 export interface PlanResponse {
     status: string;
     plan_ready: boolean;
@@ -242,6 +251,16 @@ export const api = {
 
     getProfileComments: (userId: string) =>
         apiFetch<{ comments: Record<string, unknown>[] }>(`/api/profiles/${userId}/comments`),
+
+    // Messages (Lobby Chat)
+    getMessages: (jobId: string) =>
+        apiFetch<{ messages: Message[] }>(`/api/jobs/${jobId}/messages`),
+
+    sendMessage: (jobId: string, content: string) =>
+        apiFetch<{ status: string }>(`/api/jobs/${jobId}/messages`, {
+            method: "POST",
+            body: JSON.stringify({ content }),
+        }),
 
     // Logs
     getJobLogs: (jobId: string) =>

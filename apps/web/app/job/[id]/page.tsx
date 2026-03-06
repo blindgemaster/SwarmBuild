@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { api, Job, PlanResponse, Comment, Contributor, Task } from "@/lib/api";
+import { api, Job, PlanResponse, Comment, Contributor, Task, Message } from "@/lib/api";
 import { useAuth } from "@/app/components/AuthProvider";
 import { StatusBadge } from "@/app/components/StatusBadge";
 import { TabGroup } from "@/app/components/TabGroup";
@@ -13,6 +13,7 @@ import { LobbyPanel } from "@/app/components/LobbyPanel";
 import { PlanEditor } from "@/app/components/PlanEditor";
 import { CommentThread } from "@/app/components/CommentThread";
 import { VoteBox } from "@/app/components/VoteBox";
+import { LobbyChat } from "@/app/components/LobbyChat";
 
 function timeAgo(dateStr: string): string {
     const diff = Date.now() - new Date(dateStr).getTime();
@@ -36,6 +37,7 @@ export default function JobDetailPage() {
     const [comments, setComments] = useState<Comment[]>([]);
     const [contributors, setContributors] = useState<Contributor[]>([]);
     const [tasks, setTasks] = useState<Task[]>([]);
+    const [messages, setMessages] = useState<Message[]>([]);
     const [logs, setLogs] = useState<string[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
@@ -61,18 +63,20 @@ export default function JobDetailPage() {
 
     const loadJob = useCallback(async () => {
         try {
-            const [jobData, planData, commentsData, contributorsData, tasksData] = await Promise.all([
+            const [jobData, planData, commentsData, contributorsData, tasksData, messagesData] = await Promise.all([
                 api.getJob(jobId),
                 api.getPlan(jobId).catch(() => null),
                 api.getComments(jobId).catch(() => ({ comments: [] })),
                 api.listContributors(jobId).catch(() => ({ contributors: [], total: 0 })),
                 api.listJobTasks(jobId).catch(() => ({ tasks: [] })),
+                api.getMessages(jobId).catch(() => ({ messages: [] as Message[] })),
             ]);
             setJob(jobData);
             setPlan(planData);
             setComments(commentsData.comments || []);
             setContributors(contributorsData.contributors || []);
             setTasks(tasksData.tasks || []);
+            setMessages(messagesData.messages || []);
             if (!planInitializedRef.current && (planData?.plan_ready || jobData.status === "plan_ready")) {
                 if (planData?.plan_ready) {
                     setEditingPrompt(planData.agent_prompt || "");
@@ -527,17 +531,21 @@ export default function JobDetailPage() {
                         )}
 
                         {activeTab === "team" && (
-                            <LobbyPanel
-                                job={job}
-                                contributors={contributors}
-                                onContribute={handleContribute}
-                                onToggleReady={handleToggleReady}
-                            />
+                            <div className="flex flex-col gap-6">
+                                <LobbyPanel
+                                    job={job}
+                                    contributors={contributors}
+                                    onContribute={handleContribute}
+                                    onToggleReady={handleToggleReady}
+                                />
+                                <LobbyChat jobId={jobId} initialMessages={messages} />
+                            </div>
                         )}
 
                         {activeTab === "execution" && (
                             <div className="flex flex-col gap-6">
                                 {tasks.length > 0 && <TaskBoard tasks={tasks} />}
+                                <LobbyChat jobId={jobId} initialMessages={messages} />
                                 <LogViewer logs={logs} />
                             </div>
                         )}
