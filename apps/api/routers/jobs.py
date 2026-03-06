@@ -129,7 +129,7 @@ async def list_messages(job_id: str, limit: int = Query(50, le=100)):
 
     result = (
         db.table("messages")
-        .select("*, profiles(username, display_name, avatar_url)")
+        .select("*")
         .eq("job_id", job_id)
         .order("created_at", desc=True)
         .limit(limit)
