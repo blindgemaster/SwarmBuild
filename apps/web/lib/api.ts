@@ -6,6 +6,12 @@
  */
 
 import { supabase } from "@/lib/supabase";
+import {
+    getCommentsDirectly,
+    addCommentDirectly,
+    getVoteStatusDirectly,
+    toggleVoteDirectly,
+} from "@/lib/supabase-queries";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://swarmbuild.onrender.com";
 const DEV_TOKEN = process.env.NEXT_PUBLIC_DEV_TOKEN || "dev-token-swarmbuild-test";
@@ -207,22 +213,16 @@ export const api = {
             body: JSON.stringify({ is_ready: isReady }),
         }),
 
-    // Comments
-    getComments: (jobId: string) =>
-        apiFetch<{ comments: Comment[] }>(`/api/jobs/${jobId}/comments`),
+    // Comments — direct Supabase (bypasses slow API)
+    getComments: (jobId: string) => getCommentsDirectly(jobId),
 
     addComment: (jobId: string, content: string, parentId?: string) =>
-        apiFetch(`/api/jobs/${jobId}/comments`, {
-            method: "POST",
-            body: JSON.stringify({ content, parent_id: parentId || null }),
-        }),
+        addCommentDirectly(jobId, content, parentId),
 
-    // Votes
-    toggleVote: (jobId: string) =>
-        apiFetch<{ message: string; vote_count: number; voted: boolean }>(`/api/jobs/${jobId}/vote`, { method: "POST" }),
+    // Votes — direct Supabase (bypasses slow API)
+    toggleVote: (jobId: string) => toggleVoteDirectly(jobId),
 
-    getVoteStatus: (jobId: string) =>
-        apiFetch<{ voted: boolean; vote_count: number }>(`/api/jobs/${jobId}/vote`),
+    getVoteStatus: (jobId: string) => getVoteStatusDirectly(jobId),
 
     // Credits
     getCredits: () => apiFetch<{ balance: number }>("/api/credits"),
