@@ -1,7 +1,9 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
+import { useAuth } from "@/app/components/AuthProvider";
 
 export function VoteBox({
     jobId,
@@ -12,6 +14,8 @@ export function VoteBox({
     initialCount: number;
     vertical?: boolean;
 }) {
+    const { user } = useAuth();
+    const router = useRouter();
     const [count, setCount] = useState(initialCount);
     const [voted, setVoted] = useState(false);
     const [busy, setBusy] = useState(false);
@@ -47,6 +51,7 @@ export function VoteBox({
     const handleUpvote = useCallback(async (e: React.MouseEvent) => {
         e.stopPropagation();
         e.preventDefault();
+        if (!user) { router.push("/login"); return; }
         if (busy) return;
         setBusy(true);
         // Optimistic update
@@ -68,7 +73,7 @@ export function VoteBox({
             }
         }
         if (mountedRef.current) setBusy(false);
-    }, [busy, voted, count, jobId]);
+    }, [busy, voted, count, jobId, user, router]);
 
     const formattedCount = count >= 1000 ? (count / 1000).toFixed(1) + "k" : String(count);
 

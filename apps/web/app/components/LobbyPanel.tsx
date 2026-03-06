@@ -1,6 +1,8 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { Contributor, Job } from "@/lib/api";
+import { useAuth } from "@/app/components/AuthProvider";
 
 export function LobbyPanel({
     job,
@@ -13,6 +15,8 @@ export function LobbyPanel({
     onContribute: (role: string) => void;
     onToggleReady: (isReady: boolean) => void;
 }) {
+    const { user } = useAuth();
+    const router = useRouter();
     const roles = job.required_roles?.length ? job.required_roles : ["teammate"];
     const usedContributorIds = new Set<string>();
 
@@ -97,12 +101,21 @@ export function LobbyPanel({
                                 </div>
                             </div>
                             {job.status === "approved" && (
-                                <button
-                                    onClick={() => onContribute(requiredRole)}
-                                    className="btn btn-outline btn-sm hover:!bg-[var(--accent)] hover:!text-white hover:!border-transparent"
-                                >
-                                    🚀 Claim
-                                </button>
+                                user ? (
+                                    <button
+                                        onClick={() => onContribute(requiredRole)}
+                                        className="btn btn-outline btn-sm hover:!bg-[var(--accent)] hover:!text-white hover:!border-transparent"
+                                    >
+                                        🚀 Claim
+                                    </button>
+                                ) : (
+                                    <button
+                                        onClick={() => router.push("/login")}
+                                        className="btn btn-outline btn-sm"
+                                    >
+                                        Sign in to claim
+                                    </button>
+                                )
                             )}
                         </div>
                     );

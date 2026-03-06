@@ -1,7 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { api, Comment } from "@/lib/api";
+import { useAuth } from "@/app/components/AuthProvider";
 
 // ── Helpers ─────────────────────────────────────────
 
@@ -78,10 +80,10 @@ function CommentNode({
         if (!replyText.trim() || posting) return;
         setPosting(true);
         try {
-            const result = await api.addComment(jobId, replyText.trim(), comment.id) as any;
+            const result = await api.addComment(jobId, replyText.trim(), comment.id) as Record<string, unknown>;
             // Optimistically show the new reply without re-fetching
             const optimistic: Comment = {
-                id: result?.id ?? crypto.randomUUID(),
+                id: (result?.id as string) ?? crypto.randomUUID(),
                 job_id: jobId,
                 user_id: "",
                 parent_id: comment.id,
@@ -245,6 +247,10 @@ function CommentNode({
 
 // ── Root CommentThread ───────────────────────────────
 
+function countAll(comments: Comment[]): number {
+    return comments.reduce((acc, c) => acc + 1 + countAll(c.replies ?? []), 0);
+}
+
 export function CommentThread({
     jobId,
     initialComments,
@@ -252,24 +258,35 @@ export function CommentThread({
     jobId: string;
     initialComments: Comment[];
 }) {
+    const { user } = useAuth();
+    const router = useRouter();
+
     // Server returns top-level comments with nested `replies` already built
     const [topLevel, setTopLevel] = useState<Comment[]>(initialComments);
     const [totalCount, setTotalCount] = useState(countAll(initialComments));
     const [newText, setNewText] = useState("");
     const [posting, setPosting] = useState(false);
+    const justPostedRef = useRef(false);
 
-    function countAll(comments: Comment[]): number {
-        return comments.reduce((acc, c) => acc + 1 + countAll(c.replies ?? []), 0);
-    }
+    // Sync with parent-provided comments (from polling) for real-time updates
+    useEffect(() => {
+        // Skip the sync right after user posts to avoid overwriting optimistic update
+        if (justPostedRef.current) {
+            justPostedRef.current = false;
+            return;
+        }
+        setTopLevel(initialComments);
+        setTotalCount(countAll(initialComments));
+    }, [initialComments]);
 
     async function submitTopLevel(e: React.FormEvent) {
         e.preventDefault();
         if (!newText.trim() || posting) return;
         setPosting(true);
         try {
-            const result = await api.addComment(jobId, newText.trim()) as any;
+            const result = await api.addComment(jobId, newText.trim()) as Record<string, unknown>;
             const optimistic: Comment = {
-                id: result?.id ?? crypto.randomUUID(),
+                id: (result?.id as string) ?? crypto.randomUUID(),
                 job_id: jobId,
                 user_id: "",
                 content: newText.trim(),
@@ -277,6 +294,7 @@ export function CommentThread({
                 profile: { username: "you", display_name: "You", avatar_url: "" },
                 replies: [],
             };
+            justPostedRef.current = true;
             setTopLevel(prev => [optimistic, ...prev]);
             setTotalCount(c => c + 1);
             setNewText("");
@@ -284,44 +302,62 @@ export function CommentThread({
         setPosting(false);
     }
 
-    function handleReplyPosted(_newComment: Comment, _parentId: string) {
+    function handleReplyPosted() {
         setTotalCount(c => c + 1);
     }
 
     return (
         <div id="comments">
-            {/* ── Compose box ── */}
-            <form
-                onSubmit={submitTopLevel}
-                style={{
-                    marginBottom: 20,
-                    background: "var(--surface)",
-                    border: "1px solid var(--border)",
-                    borderRadius: 4,
-                    padding: 14,
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 10,
-                }}
-            >
-                <div className="section-title">Join the discussion</div>
-                <textarea
-                    className="input"
-                    style={{ minHeight: 90 }}
-                    placeholder="What are your thoughts on this job?"
-                    value={newText}
-                    onChange={e => setNewText(e.target.value)}
-                />
-                <div>
-                    <button
-                        type="submit"
-                        className="btn btn-primary btn-sm"
-                        disabled={posting || !newText.trim()}
-                    >
-                        {posting ? "Posting…" : "Comment"}
+            {/* ── Compose box or login prompt ── */}
+            {user ? (
+                <form
+                    onSubmit={submitTopLevel}
+                    style={{
+                        marginBottom: 20,
+                        background: "var(--surface)",
+                        border: "1px solid var(--border)",
+                        borderRadius: 4,
+                        padding: 14,
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 10,
+                    }}
+                >
+                    <div className="section-title">Join the discussion</div>
+                    <textarea
+                        className="input"
+                        style={{ minHeight: 90 }}
+                        placeholder="What are your thoughts on this job?"
+                        value={newText}
+                        onChange={e => setNewText(e.target.value)}
+                    />
+                    <div>
+                        <button
+                            type="submit"
+                            className="btn btn-primary btn-sm"
+                            disabled={posting || !newText.trim()}
+                        >
+                            {posting ? "Posting…" : "Comment"}
+                        </button>
+                    </div>
+                </form>
+            ) : (
+                <div
+                    style={{
+                        marginBottom: 20,
+                        background: "var(--surface)",
+                        border: "1px solid var(--border)",
+                        borderRadius: 4,
+                        padding: 14,
+                        textAlign: "center",
+                    }}
+                >
+                    <p className="text-sm text-[var(--text-muted)] mb-3">Sign in to join the discussion</p>
+                    <button className="btn btn-primary btn-sm" onClick={() => router.push("/login")}>
+                        Sign in
                     </button>
                 </div>
-            </form>
+            )}
 
             {/* ── Comment count header ── */}
             {totalCount > 0 && (

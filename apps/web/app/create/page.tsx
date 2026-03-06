@@ -4,14 +4,15 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
+import { useAuth } from "@/app/components/AuthProvider";
 
 const DEFAULT_OUTPUT_TYPE = "fullstack";
 
 export default function CreateJobPage() {
     const router = useRouter();
+    const { user, loading } = useAuth();
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState("");
-
     const [title, setTitle] = useState("");
     const [description, setDescription] = useState("");
     const [techStackTags, setTechStackTags] = useState<string[]>([]);
@@ -19,6 +20,19 @@ export default function CreateJobPage() {
     const [agentCount, setAgentCount] = useState(1);
     const [constraints, setConstraints] = useState("");
     const [examples, setExamples] = useState("");
+
+    // Auth gate — must be logged in to post a job
+    if (!loading && !user) {
+        return (
+            <div className="max-w-md mx-auto text-center py-20 animate-fade-in">
+                <h2 className="text-xl font-bold mb-2">Sign in required</h2>
+                <p className="text-sm text-[var(--text-muted)] mb-5">You need to sign in to submit a new idea.</p>
+                <button className="btn btn-primary" onClick={() => router.push("/login")}>
+                    Sign in
+                </button>
+            </div>
+        );
+    }
 
     function addTag(value: string) {
         const tag = value.trim().toLowerCase();
