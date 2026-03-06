@@ -33,6 +33,15 @@ async def create_comment(job_id: str, req: CreateCommentRequest, request: Reques
     if not job.data:
         raise HTTPException(status_code=404, detail="Job not found")
 
+    # Ensure the user has a profile row (FK constraint requires it)
+    existing_profile = db.table("profiles").select("id").eq("id", user_id).execute()
+    if not existing_profile.data:
+        db.table("profiles").insert({
+            "id": user_id,
+            "username": f"user-{user_id[:8]}",
+            "display_name": "New User",
+        }).execute()
+
     comment = {
         "job_id": job_id,
         "user_id": user_id,
@@ -89,6 +98,15 @@ async def toggle_vote(job_id: str, request: Request):
     """Toggle vote on a job — vote if not voted, unvote if already voted."""
     user_id = await _get_user_id(request)
     db = get_supabase()
+
+    # Ensure the user has a profile row (FK constraint may require it)
+    existing_profile = db.table("profiles").select("id").eq("id", user_id).execute()
+    if not existing_profile.data:
+        db.table("profiles").insert({
+            "id": user_id,
+            "username": f"user-{user_id[:8]}",
+            "display_name": "New User",
+        }).execute()
 
     existing = (
         db.table("votes")
