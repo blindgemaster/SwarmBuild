@@ -551,10 +551,24 @@ export default function JobDetailPage() {
                         )}
 
                         {activeTab === "discussion" && (
-                            <CommentThread
-                                jobId={jobId}
-                                initialComments={comments}
-                            />
+                            <div className="flex flex-col gap-4">
+                                <div style={{
+                                    padding: "10px 14px",
+                                    background: "var(--accent-dim)",
+                                    border: "1px solid color-mix(in srgb, var(--accent) 25%, transparent)",
+                                    borderRadius: 6,
+                                    fontSize: 13,
+                                    color: "var(--text-secondary)",
+                                    lineHeight: 1.5,
+                                }}>
+                                    <span style={{ fontWeight: 600, color: "var(--accent-hover)", marginRight: 6 }}>Tip:</span>
+                                    Comments here are used to refine the AI-generated plan. Share requirements, edge cases, or preferences to help shape the build.
+                                </div>
+                                <CommentThread
+                                    jobId={jobId}
+                                    initialComments={comments}
+                                />
+                            </div>
                         )}
                     </div>
 
