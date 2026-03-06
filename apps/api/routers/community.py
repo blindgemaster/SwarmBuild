@@ -117,19 +117,34 @@ async def toggle_vote(job_id: str, request: Request):
 
 @router.get("/{job_id}/vote")
 async def get_vote_status(job_id: str, request: Request):
-    """Check if the current user has voted on a job."""
-    user_id = await _get_user_id(request)
+    """Check if the current user has voted on a job, and return current count.
+    Tolerates missing/invalid auth — returns voted=false for anonymous users."""
     db = get_supabase()
 
-    existing = (
+    # Get total vote count (always works)
+    count = (
         db.table("votes")
-        .select("user_id")
+        .select("user_id", count="exact")
         .eq("job_id", job_id)
-        .eq("user_id", user_id)
         .execute()
     )
 
-    return {"voted": len(existing.data) > 0}
+    # Try to get user vote status — gracefully handle missing auth
+    voted = False
+    try:
+        user_id = await _get_user_id(request)
+        existing = (
+            db.table("votes")
+            .select("user_id")
+            .eq("job_id", job_id)
+            .eq("user_id", user_id)
+            .execute()
+        )
+        voted = len(existing.data) > 0
+    except Exception:
+        pass
+
+    return {"voted": voted, "vote_count": count.count or 0}
 
 
 @router.delete("/{job_id}/vote")

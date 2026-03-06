@@ -222,7 +222,7 @@ export const api = {
         apiFetch<{ message: string; vote_count: number; voted: boolean }>(`/api/jobs/${jobId}/vote`, { method: "POST" }),
 
     getVoteStatus: (jobId: string) =>
-        apiFetch<{ voted: boolean }>(`/api/jobs/${jobId}/vote`),
+        apiFetch<{ voted: boolean; vote_count: number }>(`/api/jobs/${jobId}/vote`),
 
     // Credits
     getCredits: () => apiFetch<{ balance: number }>("/api/credits"),

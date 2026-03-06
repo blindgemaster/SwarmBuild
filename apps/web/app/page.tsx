@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { api, Job } from "@/lib/api";
 import { VoteBox } from "./components/VoteBox";
@@ -18,20 +18,14 @@ const OUTPUT_ICONS: Record<string, string> = {
 
 const STATUS_TABS = [
   { key: "", label: "All" },
-  { key: "pending", label: "New" },
+  { key: "pending", label: "Pending" },
   { key: "plan_ready", label: "Plan Ready" },
   { key: "approved", label: "Approved" },
-  { key: "running", label: "🟢 Active" },
+  { key: "running", label: "Running" },
   { key: "complete", label: "Complete" },
 ];
 
 type SortKey = "newest" | "votes" | "running";
-
-const SORTS: { key: SortKey; label: string; icon: string }[] = [
-  { key: "newest", label: "New", icon: "✨" },
-  { key: "votes", label: "Top", icon: "🔥" },
-  { key: "running", label: "Active", icon: "⚡" },
-];
 
 function timeAgo(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime();
@@ -170,23 +164,24 @@ export default function JobBoard() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [status, setStatus] = useState("");
   const [sort, setSort] = useState<SortKey>("newest");
   const [search, setSearch] = useState("");
 
+  const pageRef = useRef(1);
+
   const fetchJobs = useCallback(async (reset = false) => {
     if (reset) {
       setLoading(true);
       setJobs([]);
-      setPage(1);
+      pageRef.current = 1;
     } else {
       setLoadingMore(true);
     }
     setError(null);
-    const pg = reset ? 1 : page;
+    const pg = reset ? 1 : pageRef.current;
     try {
       const apiSort = sort === "votes" ? "votes" : sort === "running" ? "running" : "newest";
       const data = await api.listJobs(pg, status || undefined, apiSort);
@@ -212,16 +207,21 @@ export default function JobBoard() {
       }
 
       setHasMore(list.length >= PER_PAGE);
-      if (reset) { setJobs(list); setPage(2); }
-      else { setJobs(prev => [...prev, ...list]); setPage(p => p + 1); }
+      if (reset) {
+        setJobs(list);
+        pageRef.current = 2;
+      } else {
+        setJobs(prev => [...prev, ...list]);
+        pageRef.current = pg + 1;
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to fetch");
     }
     setLoading(false);
     setLoadingMore(false);
-  }, [status, sort, search, page]);
+  }, [status, sort, search]);
 
-  useEffect(() => { fetchJobs(true); }, [status, sort, search]);
+  useEffect(() => { fetchJobs(true); }, [fetchJobs]);
 
   return (
     <div>
@@ -246,16 +246,10 @@ export default function JobBoard() {
 
           {/* Sort bar */}
           <div className="sort-bar mb-3">
-            {SORTS.map(s => (
-              <button
-                key={s.key}
-                className={`sort-btn ${sort === s.key ? "active" : ""}`}
-                onClick={() => setSort(s.key)}
-              >
-                <span>{s.icon}</span>
-                <span>{s.label}</span>
-              </button>
-            ))}
+            <span className="text-xs text-[var(--text-muted)] mr-1">Sort:</span>
+            <button className={`sort-btn ${sort === "newest" ? "active" : ""}`} onClick={() => setSort("newest")}>New</button>
+            <button className={`sort-btn ${sort === "votes" ? "active" : ""}`} onClick={() => setSort("votes")}>Top</button>
+            <button className={`sort-btn ${sort === "running" ? "active" : ""}`} onClick={() => setSort("running")}>Active</button>
             <div style={{ flex: 1 }} />
             <a href="/create" className="btn btn-primary btn-sm">+ Submit Idea</a>
           </div>

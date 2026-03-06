@@ -85,13 +85,11 @@ export default function JobDetailPage() {
                     setEditingRoles(roles);
                     setActiveTab("plan");
                 }
-                planInitializedRef.current = true;
-            }
-            // Auto-switch to execution tab when running
-            if (jobData.status === "running" || jobData.status === "complete") {
-                if (activeTab === "overview" || activeTab === "plan") {
+                // Auto-switch to execution tab on first load only
+                if (jobData.status === "running" || jobData.status === "complete") {
                     setActiveTab("execution");
                 }
+                planInitializedRef.current = true;
             }
         } catch (e: unknown) {
             setError(e instanceof Error ? e.message : "Failed to load job");
@@ -572,8 +570,12 @@ export default function JobDetailPage() {
                                 <span className="text-xs font-bold text-[var(--vote-up)]">▲ {job.vote_count ?? 0}</span>
                             </div>
                             <div className="flex items-center justify-between py-1.5 text-sm border-b border-[var(--border)]">
+                                <span className="text-[var(--text-muted)]">Team Size</span>
+                                <span className="text-xs font-medium">{job.required_agent_count || 1}</span>
+                            </div>
+                            <div className="flex items-center justify-between py-1.5 text-sm border-b border-[var(--border)]">
                                 <span className="text-[var(--text-muted)]">Contributors</span>
-                                <span className="text-xs font-medium">{contributors.length}</span>
+                                <span className="text-xs font-medium">{contributors.length} / {job.required_agent_count || 1}</span>
                             </div>
                             <div className="flex items-center justify-between py-1.5 text-sm border-b border-[var(--border)]">
                                 <span className="text-[var(--text-muted)]">Tasks</span>
