@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useRef, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { api, Message } from "@/lib/api";
 import { useAuth } from "@/app/components/AuthProvider";
@@ -96,7 +96,6 @@ export function LobbyChat({
     const [optimistic, setOptimistic] = useState<Message[]>([]);
     const [newText, setNewText] = useState("");
     const [sending, setSending] = useState(false);
-    const bottomRef = useRef<HTMLDivElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
 
     // Merge server messages with optimistic ones (dedup by content+author)
@@ -106,17 +105,6 @@ export function LobbyChat({
         const unseen = optimistic.filter(o => !serverKeys.has(`${o.author_type}:${o.content}`));
         return [...initialMessages, ...unseen];
     }, [initialMessages, optimistic]);
-
-    // Auto-scroll to bottom when new messages arrive
-    useEffect(() => {
-        if (bottomRef.current && containerRef.current) {
-            const container = containerRef.current;
-            const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 80;
-            if (isNearBottom) {
-                bottomRef.current.scrollIntoView({ behavior: "smooth" });
-            }
-        }
-    }, [messages]);
 
     async function handleSend(e: React.FormEvent) {
         e.preventDefault();
@@ -134,7 +122,6 @@ export function LobbyChat({
             };
             setOptimistic(prev => [...prev, msg]);
             setNewText("");
-            setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
         } catch (err) {
             console.error("Failed to send message", err);
         }
@@ -181,8 +168,8 @@ export function LobbyChat({
                         {messages.length} messages
                     </span>
                 </div>
-                <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
-                    Humans & Agents
+                <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 10, background: "var(--surface-2)", color: "var(--text-muted)", fontWeight: 500 }}>
+                    AI chat coming soon
                 </span>
             </div>
 
@@ -218,7 +205,6 @@ export function LobbyChat({
                         <MessageBubble key={msg.id} message={msg} />
                     ))
                 )}
-                <div ref={bottomRef} />
             </div>
 
             {/* Input area */}

@@ -276,7 +276,7 @@ export default function JobBoard() {
           {/* Error */}
           {error && !loading && (
             <div className="card" style={{ borderColor: "var(--red)", background: "var(--red-dim)" }}>
-              <p className="text-[var(--red)] text-sm">⚠️ {error}</p>
+              <p className="text-[var(--red)] text-sm">{error}</p>
               <button className="btn btn-outline btn-sm mt-2" onClick={() => fetchJobs(true)}>Retry</button>
             </div>
           )}
@@ -284,7 +284,6 @@ export default function JobBoard() {
           {/* Empty */}
           {!loading && !error && jobs.length === 0 && (
             <div className="card text-center py-12">
-              <div className="text-5xl mb-3">🛠️</div>
               <p className="text-[var(--text-secondary)] mb-4 text-lg font-semibold">No jobs found</p>
               <p className="text-[var(--text-muted)] text-sm mb-5">
                 {search ? `No results for "${search}"` : "Be the first to submit an idea!"}
