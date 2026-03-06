@@ -88,16 +88,6 @@ export function VoteBox({
                 <span className={`vote-count ${voted ? "voted-up" : ""}`}>
                     {formattedCount}
                 </span>
-                <button
-                    className="vote-btn"
-                    onClick={handleUpvote}
-                    title={voted ? "Remove vote" : "Upvote"}
-                    disabled={busy}
-                >
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M12 20l-9-9h6V4h6v7h6z" />
-                    </svg>
-                </button>
             </div>
         );
     }

@@ -116,6 +116,31 @@ export function NavUser() {
                         <strong style={{ color: "var(--text)", fontSize: 13 }}>{user.email}</strong>
                     </div>
                     <button
+                        onClick={() => { setOpen(false); router.push(`/profile/${user.id}`); }}
+                        style={{
+                            width: "100%",
+                            padding: "10px 14px",
+                            textAlign: "left",
+                            background: "none",
+                            border: "none",
+                            borderBottom: "1px solid var(--border)",
+                            cursor: "pointer",
+                            fontSize: 13,
+                            color: "var(--text)",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8,
+                        }}
+                        onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
+                        onMouseLeave={e => (e.currentTarget.style.background = "none")}
+                    >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2" />
+                            <circle cx="12" cy="7" r="4" />
+                        </svg>
+                        My Profile
+                    </button>
+                    <button
                         onClick={async () => { setOpen(false); await signOut(); router.push("/login"); }}
                         style={{
                             width: "100%",

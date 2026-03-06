@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { api, Job, PlanResponse, Comment, Contributor, Task } from "@/lib/api";
 import { useAuth } from "@/app/components/AuthProvider";
@@ -27,6 +27,7 @@ function timeAgo(dateStr: string): string {
 export default function JobDetailPage() {
     const params = useParams();
     const router = useRouter();
+    const searchParams = useSearchParams();
     const { user } = useAuth();
     const jobId = params.id as string;
 
@@ -38,7 +39,7 @@ export default function JobDetailPage() {
     const [logs, setLogs] = useState<string[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
-    const [activeTab, setActiveTab] = useState("overview");
+    const [activeTab, setActiveTab] = useState(searchParams.get("tab") || "overview");
 
     // Action states
     const [generatingPlan, setGeneratingPlan] = useState(false);
@@ -571,11 +572,11 @@ export default function JobDetailPage() {
                             </div>
                             <div className="flex items-center justify-between py-1.5 text-sm border-b border-[var(--border)]">
                                 <span className="text-[var(--text-muted)]">Team Size</span>
-                                <span className="text-xs font-medium">{job.required_agent_count || 1}</span>
+                                <span className="text-xs font-medium">{job.required_roles?.length || job.required_agent_count || 1}</span>
                             </div>
                             <div className="flex items-center justify-between py-1.5 text-sm border-b border-[var(--border)]">
                                 <span className="text-[var(--text-muted)]">Contributors</span>
-                                <span className="text-xs font-medium">{contributors.length} / {job.required_agent_count || 1}</span>
+                                <span className="text-xs font-medium">{contributors.length} / {job.required_roles?.length || job.required_agent_count || 1}</span>
                             </div>
                             <div className="flex items-center justify-between py-1.5 text-sm border-b border-[var(--border)]">
                                 <span className="text-[var(--text-muted)]">Tasks</span>

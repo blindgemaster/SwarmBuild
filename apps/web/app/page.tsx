@@ -8,14 +8,6 @@ import { Sidebar } from "./components/Sidebar";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-const OUTPUT_ICONS: Record<string, string> = {
-  "rest-api": "🌐",
-  "cli": "⚡",
-  "library": "📦",
-  "script": "📜",
-  "fullstack": "🚀",
-};
-
 const STATUS_TABS = [
   { key: "", label: "All" },
   { key: "pending", label: "Pending" },
@@ -61,8 +53,6 @@ function JobCard({ job }: { job: Job }) {
             onClick={(e) => { e.stopPropagation(); if (job.poster_id) window.location.href = `/profile/${job.poster_id}`; }}
           >{job.poster_profile?.display_name || job.poster_profile?.username || "Anonymous"}</span>
           <span>·</span>
-          <span>{OUTPUT_ICONS[job.output_type] ?? "📦"} {job.output_type}</span>
-          <span>·</span>
           <span>posted {timeAgo(job.created_at)}</span>
           {job.active_contributors != null && job.active_contributors > 0 && (
             <>
@@ -101,11 +91,11 @@ function JobCard({ job }: { job: Job }) {
           <span className={`badge badge-${job.status}`}>{job.status.replace("_", " ")}</span>
 
           {/* Comment count */}
-          <button className="job-card-action" onClick={(e) => { e.stopPropagation(); router.push(`/job/${job.id}#comments`); }}>
+          <button className="job-card-action" onClick={(e) => { e.stopPropagation(); router.push(`/job/${job.id}?tab=discussion`); }}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style={{ color: "var(--text-muted)" }}>
               <path d="M20 2H4a2 2 0 00-2 2v12a2 2 0 002 2h14l4 4V4a2 2 0 00-2-2z" />
             </svg>
-            <span>Comments</span>
+            <span>Join the discussion</span>
           </button>
 
           {/* GitHub */}
