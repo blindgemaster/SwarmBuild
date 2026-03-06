@@ -16,8 +16,8 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
-  "description": "",
+  "license": "MIT",
+  "description": "Multi-agent AI teams that build software from your ideas",
   "dependencies": {
     "dotenv": "^17.3.1",
     "pg": "^8.18.0"
