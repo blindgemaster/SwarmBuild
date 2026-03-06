@@ -8,11 +8,70 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request, Query
 from pydantic import BaseModel
 from typing import Optional
+import httpx
+import logging
 
 from database import get_supabase
 from auth_dependency import get_current_user_id as _get_user_id
+from config import get_settings
 
 router = APIRouter()
+
+logger = logging.getLogger(__name__)
+
+
+async def _ensure_profile(user_id: str, request: Request):
+    """Ensure a profiles row exists for user_id with real metadata.
+    If missing, fetch real metadata from Supabase Auth and create the row.
+    If exists but has placeholder name, update it with real metadata."""
+    db = get_supabase()
+    existing = db.table("profiles").select("id, display_name").eq("id", user_id).execute()
+    if existing.data and existing.data[0].get("display_name") not in (None, "New User"):
+        return
+
+    # Try to pull real user info from Supabase Auth
+    display_name = "New User"
+    username = f"user-{user_id[:8]}"
+    avatar_url = None
+    github_username = None
+
+    try:
+        token = request.headers.get("Authorization", "").split(" ", 1)[1]
+        settings = get_settings()
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{settings.supabase_url}/auth/v1/user",
+                headers={
+                    "apikey": settings.supabase_anon_key,
+                    "Authorization": f"Bearer {token}",
+                },
+            )
+        if resp.status_code == 200:
+            user_data = resp.json()
+            meta = user_data.get("user_metadata") or {}
+            display_name = meta.get("full_name") or meta.get("name") or display_name
+            avatar_url = meta.get("avatar_url") or avatar_url
+            github_username = meta.get("user_name") or meta.get("preferred_username") or github_username
+            email = user_data.get("email", "")
+            if email and username.startswith("user-"):
+                username = email.split("@")[0]
+    except Exception as e:
+        logger.warning(f"Could not fetch user metadata for profile creation: {e}")
+
+    profile_data = {
+        "display_name": display_name,
+        "avatar_url": avatar_url,
+        "github_username": github_username,
+    }
+
+    if existing.data:
+        # Update the placeholder profile with real data
+        db.table("profiles").update(profile_data).eq("id", user_id).execute()
+    else:
+        # Create new profile
+        profile_data["id"] = user_id
+        profile_data["username"] = username
+        db.table("profiles").insert(profile_data).execute()
 
 
 # ── Comments ────────────────────────────────────────
@@ -34,13 +93,7 @@ async def create_comment(job_id: str, req: CreateCommentRequest, request: Reques
         raise HTTPException(status_code=404, detail="Job not found")
 
     # Ensure the user has a profile row (FK constraint requires it)
-    existing_profile = db.table("profiles").select("id").eq("id", user_id).execute()
-    if not existing_profile.data:
-        db.table("profiles").insert({
-            "id": user_id,
-            "username": f"user-{user_id[:8]}",
-            "display_name": "New User",
-        }).execute()
+    await _ensure_profile(user_id, request)
 
     comment = {
         "job_id": job_id,
@@ -100,13 +153,7 @@ async def toggle_vote(job_id: str, request: Request):
     db = get_supabase()
 
     # Ensure the user has a profile row (FK constraint may require it)
-    existing_profile = db.table("profiles").select("id").eq("id", user_id).execute()
-    if not existing_profile.data:
-        db.table("profiles").insert({
-            "id": user_id,
-            "username": f"user-{user_id[:8]}",
-            "display_name": "New User",
-        }).execute()
+    await _ensure_profile(user_id, request)
 
     existing = (
         db.table("votes")
