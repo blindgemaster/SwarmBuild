@@ -339,18 +339,15 @@ You are a **${role.toUpperCase()}** agent on this team.
 `;
     }
 
-    // Write prompt to file — Claude reads this instead of a long CLI argument
+    // Write prompt to file as backup — but primary delivery is via stdin
     const systemPromptPath = path.join(WORKSPACE, "SYSTEM_PROMPT.md");
     await fs.writeFile(systemPromptPath, systemPrompt, "utf8");
-
-    // Short CLI prompt — will NOT get truncated by Windows shell escaping
-    const cliPrompt = "Read SYSTEM_PROMPT.md and follow the instructions exactly.";
 
     console.log(`[swarmbuild] Spawning Claude Code (${isPlanning ? 'planning' : 'execution'}, role: ${role})...`);
 
     return new Promise((resolve, reject) => {
         const claudeArgs = [
-            cliPrompt,
+            "--print",                    // non-interactive: read prompt from stdin, print result, exit
             "--mcp-config", "claude_mcp.json",
             "--dangerously-skip-permissions"
         ];
@@ -360,12 +357,17 @@ You are a **${role.toUpperCase()}** agent on this team.
             claudeArgs.push("--allowed-tools", "swarmbuild_create_tasks,swarmbuild_get_tasks,swarmbuild_claim_task,swarmbuild_complete_task,swarmbuild_send_message,swarmbuild_read_chat");
         }
 
+        // stdin = "pipe" so we can write the prompt directly (bypasses shell escaping entirely)
         const claude = spawn("claude", claudeArgs, {
             cwd: WORKSPACE,
-            stdio: ["inherit", "pipe", "pipe"],
+            stdio: ["pipe", "pipe", "pipe"],
             shell: true,
             env: { ...process.env, CLAUDE_CONFIG_FILE: mcpConfigPath, FORCE_COLOR: "1" }
         });
+
+        // Send the full prompt via stdin — no shell escaping, no truncation
+        claude.stdin.write(systemPrompt);
+        claude.stdin.end();
 
         claude.stdout.on("data", (data) => {
             const str = data.toString();
