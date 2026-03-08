@@ -201,6 +201,7 @@ async function setupWorkspace(jobInfo, WORKSPACE) {
         "claude_mcp.json",
         "AGENT_PROMPT.md",
         "TASK_LIST.md",
+        "SYSTEM_PROMPT.md",
         "",
     ].join("\n");
     // Only write if it doesn't already exist so we don't clobber a project's own .gitignore
@@ -236,10 +237,6 @@ async function setupWorkspace(jobInfo, WORKSPACE) {
 }
 
 async function startAgentInteractive(api, role, jobInfo, isPlanning = false, WORKSPACE) {
-    // We start the MCP Server in the same Node process, but attach it to stdio.
-    // Wait, if Claude connects via MCP, Claude needs to *launch* an MCP server.
-    // We handle that by writing a fast claude config json.
-
     const mcpConfigPath = path.join(WORKSPACE, "claude_mcp.json");
     const mcpConfig = {
         "mcpServers": {
@@ -253,17 +250,8 @@ async function startAgentInteractive(api, role, jobInfo, isPlanning = false, WOR
     if (process.env.GITHUB_TOKEN) {
         mcpConfig.mcpServers.github = {
             "command": "docker",
-            "args": [
-                "run",
-                "-i",
-                "--rm",
-                "-e",
-                "GITHUB_PERSONAL_ACCESS_TOKEN",
-                "ghcr.io/github/github-mcp-server"
-            ],
-            "env": {
-                "GITHUB_PERSONAL_ACCESS_TOKEN": process.env.GITHUB_TOKEN
-            }
+            "args": ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "ghcr.io/github/github-mcp-server"],
+            "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": process.env.GITHUB_TOKEN }
         };
     }
 
@@ -275,55 +263,116 @@ async function startAgentInteractive(api, role, jobInfo, isPlanning = false, WOR
         jobInfo.required_roles.every(r => r === 'lead')
     );
 
-    let prompt = "";
+    // ── Write detailed prompt to a file (avoids Windows shell escaping issues) ──
+    let systemPrompt = "";
+
     if (isPlanning && role === 'lead') {
         const availableRoles = jobInfo.required_roles && jobInfo.required_roles.length > 0
             ? jobInfo.required_roles.join(", ")
             : "lead";
 
-        if (isSoloLead) {
-            prompt = `Read AGENT_PROMPT.md and TASK_LIST.md. TASK_LIST.md contains AI-suggested tasks — use them as your starting point. You are the SOLE agent on this job. Use swarmbuild_create_tasks to create all tasks. Assign ALL tasks to assigned_role = "lead" since you are the only contributor. DO NOT write code yourself during planning.`;
-        } else {
-            prompt = `Read AGENT_PROMPT.md and TASK_LIST.md. TASK_LIST.md contains AI-suggested tasks — use them as your starting point. Use swarmbuild_create_tasks to create tasks for the team. YOU MUST map every task to one of these specific assigned_roles: [${availableRoles}]. DO NOT invent roles like "developer", use ONLY the provided roles. DO NOT write code yourself.`;
-        }
-    } else if (isSoloLead) {
-        prompt = `You are the Lead agent and sole contributor on this job. Read AGENT_PROMPT.md. Use swarmbuild_get_tasks to find ALL available tasks regardless of their assigned_role. Claim them one at a time and implement them fully. Use swarmbuild_send_message to report progress.`;
-    } else {
-        prompt = `You are a ${role}. Use swarmbuild_get_tasks to find tasks with assigned_role = "${role}". Claim them, run them, complete them. Use swarmbuild_send_message if stuck.`;
-    }
-    const isWindows = process.platform === 'win32';
-    const escapedPrompt = isWindows ? `"${prompt.replace(/"/g, '\\"')}"` : prompt;
+        systemPrompt = `# Swarmbuild — Planning Phase
 
-    console.log(`[swarmbuild] Spawning Claude Code...`);
+## Your Role
+You are the **LEAD AGENT** responsible for creating tasks for the team.
+
+## Step-by-step Instructions
+1. Read the file AGENT_PROMPT.md in this directory for the project requirements.
+2. Read the file TASK_LIST.md for AI-suggested tasks — use them as your starting point.
+3. Use the MCP tool swarmbuild_create_tasks to create tasks for the team.
+${isSoloLead
+                ? '4. You are the SOLE agent. Assign ALL tasks to assigned_role = "lead".'
+                : `4. Assign every task to one of these roles ONLY: [${availableRoles}]. Do NOT invent new role names.`
+            }
+5. Do NOT write any code yourself during planning. Only create tasks.
+
+## Available MCP Tools
+- swarmbuild_create_tasks — Create tasks (array of {title, description, assigned_role})
+- swarmbuild_send_message — Send a message to the team chat
+- swarmbuild_read_chat — Read recent chat messages
+`;
+    } else if (isSoloLead) {
+        systemPrompt = `# Swarmbuild — Execution Phase
+
+## Your Role
+You are the **LEAD AGENT** and the sole contributor on this job.
+
+## Step-by-step Instructions
+1. Read the file AGENT_PROMPT.md in this directory for the project requirements.
+2. Use the MCP tool swarmbuild_get_tasks to see all available tasks.
+3. Pick one task at a time:
+   a. Use swarmbuild_claim_task with the task ID to lock it.
+   b. Implement the task fully by writing code in this directory.
+   c. Use swarmbuild_complete_task with the task ID and status "completed" when done.
+4. Repeat step 3 until all tasks are complete.
+5. Use swarmbuild_send_message to report progress.
+
+## Available MCP Tools
+- swarmbuild_get_tasks — List all tasks and their statuses
+- swarmbuild_claim_task — Lock a task so only you work on it (pass task_id)
+- swarmbuild_complete_task — Mark a task done (pass task_id, status: "completed" or "failed")
+- swarmbuild_send_message — Broadcast a progress message
+- swarmbuild_read_chat — Read recent chat messages
+`;
+    } else {
+        systemPrompt = `# Swarmbuild — Execution Phase
+
+## Your Role
+You are a **${role.toUpperCase()}** agent on this team.
+
+## Step-by-step Instructions
+1. Read the file AGENT_PROMPT.md in this directory for the project requirements.
+2. Use the MCP tool swarmbuild_get_tasks to find tasks with assigned_role = "${role}".
+3. Pick one task at a time:
+   a. Use swarmbuild_claim_task with the task ID to lock it.
+   b. Implement the task fully by writing code in this directory.
+   c. Use swarmbuild_complete_task with the task ID and status "completed" when done.
+4. Repeat step 3 until all your tasks are complete.
+5. Use swarmbuild_send_message if you need help or to report progress.
+
+## Available MCP Tools
+- swarmbuild_get_tasks — List all tasks and their statuses
+- swarmbuild_claim_task — Lock a task so only you work on it (pass task_id)
+- swarmbuild_complete_task — Mark a task done (pass task_id, status: "completed" or "failed")
+- swarmbuild_send_message — Broadcast a progress message
+- swarmbuild_read_chat — Read recent chat messages
+`;
+    }
+
+    // Write prompt to file — Claude reads this instead of a long CLI argument
+    const systemPromptPath = path.join(WORKSPACE, "SYSTEM_PROMPT.md");
+    await fs.writeFile(systemPromptPath, systemPrompt, "utf8");
+
+    // Short CLI prompt — will NOT get truncated by Windows shell escaping
+    const cliPrompt = "Read SYSTEM_PROMPT.md and follow the instructions exactly.";
+
+    console.log(`[swarmbuild] Spawning Claude Code (${isPlanning ? 'planning' : 'execution'}, role: ${role})...`);
 
     return new Promise((resolve, reject) => {
         const claudeArgs = [
-            escapedPrompt,
+            cliPrompt,
             "--mcp-config", "claude_mcp.json",
             "--dangerously-skip-permissions"
         ];
 
-        // If GITHUB_TOKEN is missing, restrict tools to swarmbuild only. Otherwise, allow github tools by omitting the restriction.
+        // If GITHUB_TOKEN is missing, restrict tools to swarmbuild only.
         if (!process.env.GITHUB_TOKEN) {
             claudeArgs.push("--allowed-tools", "swarmbuild_create_tasks,swarmbuild_get_tasks,swarmbuild_claim_task,swarmbuild_complete_task,swarmbuild_send_message,swarmbuild_read_chat");
         }
 
-        // Actually spawn the global `claude` CLI
         const claude = spawn("claude", claudeArgs, {
             cwd: WORKSPACE,
-            stdio: ["inherit", "pipe", "pipe"], // Allow stdin so TTY features and colors might work natively
+            stdio: ["inherit", "pipe", "pipe"],
             shell: true,
             env: { ...process.env, CLAUDE_CONFIG_FILE: mcpConfigPath, FORCE_COLOR: "1" }
         });
 
-        // Pipe stdout to backend logs AND to terminal
         claude.stdout.on("data", (data) => {
             const str = data.toString();
             process.stdout.write(str);
             api.publishLog(str).catch(() => { });
         });
 
-        // Pipe stderr to backend logs AND to terminal
         claude.stderr.on("data", (data) => {
             const str = data.toString();
             process.stderr.write(str);
@@ -331,13 +380,13 @@ async function startAgentInteractive(api, role, jobInfo, isPlanning = false, WOR
         });
 
         claude.on("close", (code) => {
-            console.log(`[swarmbuild] Claude exited with code ${code} `);
+            console.log(`[swarmbuild] Claude exited with code ${code}`);
             api.publishLog(`SYSTEM: Agent exited with code ${code}`).catch(() => { });
             resolve(code);
         });
 
         claude.on("error", (err) => {
-            console.log(`[swarmbuild] Error spawning Claude Code.Is it installed ? (npm i - g @anthropic-ai / claude - code)`);
+            console.log(`[swarmbuild] Error spawning Claude Code. Is it installed? (npm i -g @anthropic-ai/claude-code)`);
             reject(err);
         });
     });

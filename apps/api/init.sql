@@ -107,6 +107,19 @@ CREATE TABLE IF NOT EXISTS credit_events (
 CREATE INDEX IF NOT EXISTS idx_credits_user ON credit_events(user_id);
 
 -- ─────────────────────────────────────────
+-- User profiles — synced from Supabase Auth
+-- (must be created before comments, which references it)
+-- ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS profiles (
+    id              UUID PRIMARY KEY,
+    username        TEXT UNIQUE,
+    display_name    TEXT,
+    avatar_url      TEXT,
+    github_username TEXT,
+    created_at      TIMESTAMPTZ DEFAULT now()
+);
+
+-- ─────────────────────────────────────────
 -- Comments — threaded discussion per job
 -- ─────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS comments (
@@ -178,14 +191,3 @@ CREATE TABLE IF NOT EXISTS job_logs (
 
 CREATE INDEX IF NOT EXISTS idx_job_logs_job ON job_logs(job_id, id);
 
--- ─────────────────────────────────────────
--- User profiles — synced from Supabase Auth
--- ─────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS profiles (
-    id              UUID PRIMARY KEY,
-    username        TEXT UNIQUE,
-    display_name    TEXT,
-    avatar_url      TEXT,
-    github_username TEXT,
-    created_at      TIMESTAMPTZ DEFAULT now()
-);
