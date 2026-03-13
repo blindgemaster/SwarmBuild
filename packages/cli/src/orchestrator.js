@@ -4,14 +4,139 @@ import path from "path";
 import util from "util";
 import { fileURLToPath } from "url";
 import { SwarmbuildAPI } from "./api.js";
+import { getRuntime } from "./runtimes/index.js";
+import { buildPrompt } from "./runtimes/prompts.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const exec = util.promisify(execCb);
+
+// ── v2: Global tracking state ──
+let heartbeatInterval = null;
+let totalTokensUsed = 0;
+let sessionCount = 0;
+let commitCount = 0;
+let currentTaskId = null;
+let WORKSPACE = null;
+
+function startHeartbeat(api) {
+    heartbeatInterval = setInterval(async () => {
+        try {
+            const response = await api.heartbeat({
+                agents_running: 1,
+                tokens_used: totalTokensUsed,
+                current_task_id: currentTaskId,
+                status: currentTaskId ? "working" : "idle",
+                sessions_run: sessionCount,
+                commits_pushed: commitCount,
+            });
+
+            // Server-initiated stop
+            if (response.should_stop) {
+                console.log(`[swarmbuild] ⛔ Server requested stop: ${response.stop_reason}`);
+                await gracefulShutdown(api, response.stop_reason);
+            }
+
+            // Budget warnings
+            if (response.pending_notifications) {
+                for (const notif of response.pending_notifications) {
+                    console.log(`[swarmbuild] ⚠️ ${notif.message}`);
+                }
+            }
+        } catch (err) {
+            // Network error — log but don't crash
+            console.log(`[swarmbuild] ⚠️ Heartbeat failed: ${err.message}`);
+        }
+    }, 30_000); // Every 30 seconds
+}
+
+function stopHeartbeat() {
+    if (heartbeatInterval) {
+        clearInterval(heartbeatInterval);
+        heartbeatInterval = null;
+    }
+}
+
+async function gracefulShutdown(api, reason = "user_interrupted") {
+    console.log(`\n[swarmbuild] 🛑 Initiating graceful shutdown (reason: ${reason})...`);
+
+    // 1. Stop the heartbeat
+    stopHeartbeat();
+
+    // 2. Release all tasks locked by this worker
+    try {
+        const released = await api.releaseAllMyTasks();
+        console.log(`[swarmbuild] Released ${released.count} locked task(s)`);
+    } catch (err) {
+        console.log(`[swarmbuild] ⚠️ Failed to release tasks: ${err.message}`);
+    }
+
+    // 3. Commit and push any uncommitted work
+    if (WORKSPACE) {
+        try {
+            await exec("git add .", { cwd: WORKSPACE });
+            try {
+                await exec(
+                    `git commit -m "WIP: Agent shutdown (${reason}) — partial work"`,
+                    { cwd: WORKSPACE }
+                );
+                // Push to a WIP branch so work isn't lost
+                const wipBranch = `wip/${api.workerToken?.slice(-8) || 'unknown'}`;
+                await exec(
+                    `git push origin HEAD:${wipBranch}`,
+                    { cwd: WORKSPACE }
+                );
+                console.log(`[swarmbuild] ✅ Pushed partial work to branch ${wipBranch}`);
+            } catch {
+                // Nothing to commit — that's fine
+            }
+        } catch (err) {
+            console.log(`[swarmbuild] ⚠️ Failed to save partial work: ${err.message}`);
+        }
+    }
+
+    // 4. Notify server
+    try {
+        await api.workerComplete("stopped", `Graceful shutdown: ${reason}`);
+    } catch {
+        // Server might be unreachable
+    }
+
+    console.log("[swarmbuild] Goodbye! 👋");
+}
+
+function registerShutdownHandlers(api) {
+    let shuttingDown = false;
+
+    const handler = async (signal) => {
+        if (shuttingDown) {
+            console.log("[swarmbuild] Force exit.");
+            process.exit(1);
+        }
+        shuttingDown = true;
+
+        await gracefulShutdown(api, signal);
+        process.exit(0);
+    };
+
+    process.on("SIGINT", () => handler("SIGINT"));
+    process.on("SIGTERM", () => handler("SIGTERM"));
+    process.on("uncaughtException", async (err) => {
+        console.error(`[swarmbuild] 💥 Uncaught exception: ${err.message}`);
+        await gracefulShutdown(api, "uncaught_exception");
+        process.exit(1);
+    });
+    process.on("unhandledRejection", async (err) => {
+        console.error(`[swarmbuild] 💥 Unhandled rejection: ${err}`);
+        await gracefulShutdown(api, "unhandled_rejection");
+        process.exit(1);
+    });
+}
+
 export async function runLobby(jobId, options) {
-    const { role, relay, token } = options;
-    console.log(`[swarmbuild] Joining Job ${jobId} as ${role}...`);
+    const { role, relay, token, runtime: runtimeName = "claude" } = options;
+    console.log(`[swarmbuild] Joining Job ${jobId} as ${role} (runtime: ${runtimeName})...`);
 
     const api = new SwarmbuildAPI(relay, token);
 
@@ -23,16 +148,21 @@ export async function runLobby(jobId, options) {
     // 2. Fetch Job Info
     const jobInfo = await api.getJobInfo();
 
-    const WORKSPACE = path.join(process.cwd(), `workspace-${jobId}`);
+    WORKSPACE = path.join(process.cwd(), `workspace-${jobId}`);
 
     // 3. Setup local workspace
     await setupWorkspace(jobInfo, WORKSPACE);
 
+    // v2: Start heartbeat loop + register shutdown handlers
+    startHeartbeat(api);
+    registerShutdownHandlers(api);
+    console.log(`[swarmbuild] Heartbeat started (every 30s)`);
+
     // 4. Pre-Run Lobby Loop
     if (role === 'lead') {
-        console.log(`\n[swarmbuild] You are the LEAD. Launching Claude to propose the Agent Team Plan...`);
-        await startAgentInteractive(api, role, jobInfo, true, WORKSPACE);
-        console.log(`\n[swarmbuild] ℹ️ Tip: Claude operates fully autonomously and exits when its instruction finishes.`);
+        console.log(`\n[swarmbuild] You are the LEAD. Launching ${runtimeName} to propose the Agent Team Plan...`);
+        await startAgentInteractive(api, role, jobInfo, true, WORKSPACE, runtimeName);
+        console.log(`\n[swarmbuild] ℹ️ Tip: The agent operates fully autonomously and exits when its instruction finishes.`);
         console.log(`[swarmbuild] Plan proposed! Now chat with humans on the website.`);
     } else {
         console.log(`\n[swarmbuild] You are a TEAMMATE(${role}).Waiting in the Lobby...`);
@@ -112,13 +242,20 @@ export async function runLobby(jobId, options) {
             continue;
         }
 
-        const exitCode = await startAgentInteractive(api, role, jobInfo, false, WORKSPACE);
+        sessionCount++;
+        const exitCode = await startAgentInteractive(api, role, jobInfo, false, WORKSPACE, runtimeName);
 
         if (exitCode !== 0) {
             console.log(`[swarmbuild] Agent exited with code ${exitCode}. Pausing for 5s before loop restarts...`);
             await new Promise(r => setTimeout(r, 5000));
         }
     }
+
+    // Clean shutdown after all tasks done
+    stopHeartbeat();
+    try {
+        await api.workerComplete("complete", "All tasks completed");
+    } catch { /* ignore */ }
 }
 
 async function setupWorkspace(jobInfo, WORKSPACE) {
@@ -199,6 +336,9 @@ async function setupWorkspace(jobInfo, WORKSPACE) {
         "# Swarmbuild runtime files — do not commit",
         ".deploy_key",
         "claude_mcp.json",
+        "gemini_mcp.json",
+        "codex_mcp.json",
+        "*_mcp.json",
         "AGENT_PROMPT.md",
         "TASK_LIST.md",
         "SYSTEM_PROMPT.md",
@@ -236,26 +376,32 @@ async function setupWorkspace(jobInfo, WORKSPACE) {
     }
 }
 
-async function startAgentInteractive(api, role, jobInfo, isPlanning = false, WORKSPACE) {
-    const mcpConfigPath = path.join(WORKSPACE, "claude_mcp.json");
-    const mcpConfig = {
-        "mcpServers": {
-            "swarmbuild": {
-                "command": "node",
-                "args": [path.join(__dirname, "mcp-runner.js"), api.relayUrl, api.workerToken, WORKSPACE]
-            }
-        }
+async function startAgentInteractive(api, role, jobInfo, isPlanning = false, WORKSPACE, runtimeName = "claude") {
+    const runtime = getRuntime(runtimeName);
+    console.log(`[swarmbuild] Using runtime: ${runtime.name}`);
+
+    // Build MCP server config (canonical, runtime-agnostic)
+    const mcpServerConfig = {
+        swarmbuild: {
+            command: "node",
+            args: [path.join(__dirname, "mcp-runner.js"), api.relayUrl, api.workerToken, WORKSPACE],
+        },
     };
 
     if (process.env.GITHUB_TOKEN) {
-        mcpConfig.mcpServers.github = {
-            "command": "docker",
-            "args": ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "ghcr.io/github/github-mcp-server"],
-            "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": process.env.GITHUB_TOKEN }
+        mcpServerConfig.github = {
+            command: "docker",
+            args: ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "ghcr.io/github/github-mcp-server"],
+            env: { GITHUB_PERSONAL_ACCESS_TOKEN: process.env.GITHUB_TOKEN },
         };
     }
 
-    await fs.writeFile(mcpConfigPath, JSON.stringify(mcpConfig, null, 2));
+    // Let the runtime adapter format the MCP config
+    const mcpConfig = runtime.buildMCPConfig(mcpServerConfig);
+    const mcpConfigPath = path.join(WORKSPACE, `${runtime.name}_mcp.json`);
+    if (mcpConfig) {
+        await fs.writeFile(mcpConfigPath, JSON.stringify(mcpConfig, null, 2));
+    }
 
     const isSoloLead = role === 'lead' && (
         !jobInfo.required_roles?.length ||
@@ -263,132 +409,65 @@ async function startAgentInteractive(api, role, jobInfo, isPlanning = false, WOR
         jobInfo.required_roles.every(r => r === 'lead')
     );
 
-    // ── Write detailed prompt to a file (avoids Windows shell escaping issues) ──
-    let systemPrompt = "";
-
-    if (isPlanning && role === 'lead') {
-        const availableRoles = jobInfo.required_roles && jobInfo.required_roles.length > 0
-            ? jobInfo.required_roles.join(", ")
-            : "lead";
-
-        systemPrompt = `# Swarmbuild — Planning Phase
-
-## Your Role
-You are the **LEAD AGENT** responsible for creating tasks for the team.
-
-## Step-by-step Instructions
-1. Read the file AGENT_PROMPT.md in this directory for the project requirements.
-2. Read the file TASK_LIST.md for AI-suggested tasks — use them as your starting point.
-3. Use the MCP tool swarmbuild_create_tasks to create tasks for the team.
-${isSoloLead
-                ? '4. You are the SOLE agent. Assign ALL tasks to assigned_role = "lead".'
-                : `4. Assign every task to one of these roles ONLY: [${availableRoles}]. Do NOT invent new role names.`
-            }
-5. Do NOT write any code yourself during planning. Only create tasks.
-
-## Available MCP Tools
-- swarmbuild_create_tasks — Create tasks (array of {title, description, assigned_role})
-- swarmbuild_send_message — Send a message to the team chat
-- swarmbuild_read_chat — Read recent chat messages
-`;
-    } else if (isSoloLead) {
-        systemPrompt = `# Swarmbuild — Execution Phase
-
-## Your Role
-You are the **LEAD AGENT** and the sole contributor on this job.
-
-## Step-by-step Instructions
-1. Read the file AGENT_PROMPT.md in this directory for the project requirements.
-2. Use the MCP tool swarmbuild_get_tasks to see all available tasks.
-3. Pick one task at a time:
-   a. Use swarmbuild_claim_task with the task ID to lock it.
-   b. Implement the task fully by writing code in this directory.
-   c. Use swarmbuild_complete_task with the task ID and status "completed" when done.
-4. Repeat step 3 until all tasks are complete.
-5. Use swarmbuild_send_message to report progress.
-
-## Available MCP Tools
-- swarmbuild_get_tasks — List all tasks and their statuses
-- swarmbuild_claim_task — Lock a task so only you work on it (pass task_id)
-- swarmbuild_complete_task — Mark a task done (pass task_id, status: "completed" or "failed")
-- swarmbuild_send_message — Broadcast a progress message
-- swarmbuild_read_chat — Read recent chat messages
-`;
-    } else {
-        systemPrompt = `# Swarmbuild — Execution Phase
-
-## Your Role
-You are a **${role.toUpperCase()}** agent on this team.
-
-## Step-by-step Instructions
-1. Read the file AGENT_PROMPT.md in this directory for the project requirements.
-2. Use the MCP tool swarmbuild_get_tasks to find tasks with assigned_role = "${role}".
-3. Pick one task at a time:
-   a. Use swarmbuild_claim_task with the task ID to lock it.
-   b. Implement the task fully by writing code in this directory.
-   c. Use swarmbuild_complete_task with the task ID and status "completed" when done.
-4. Repeat step 3 until all your tasks are complete.
-5. Use swarmbuild_send_message if you need help or to report progress.
-
-## Available MCP Tools
-- swarmbuild_get_tasks — List all tasks and their statuses
-- swarmbuild_claim_task — Lock a task so only you work on it (pass task_id)
-- swarmbuild_complete_task — Mark a task done (pass task_id, status: "completed" or "failed")
-- swarmbuild_send_message — Broadcast a progress message
-- swarmbuild_read_chat — Read recent chat messages
-`;
-    }
+    // v2: Use prompt translation layer for runtime-specific prompts
+    const systemPrompt = buildPrompt(runtime, {
+        role,
+        isPlanning,
+        isSoloLead,
+        jobInfo,
+        availableRoles: jobInfo.required_roles,
+    });
 
     // Write prompt to file as backup — but primary delivery is via stdin
     const systemPromptPath = path.join(WORKSPACE, "SYSTEM_PROMPT.md");
     await fs.writeFile(systemPromptPath, systemPrompt, "utf8");
 
-    console.log(`[swarmbuild] Spawning Claude Code (${isPlanning ? 'planning' : 'execution'}, role: ${role})...`);
+    console.log(`[swarmbuild] Spawning ${runtime.name} (${isPlanning ? 'planning' : 'execution'}, role: ${role})...`);
+
+    // Use the runtime adapter to spawn the agent
+    const spawnConfig = {
+        workspacePath: WORKSPACE,
+        mcpConfigPath,
+        systemPrompt,
+        isPlanning,
+        role,
+        env: process.env,
+    };
 
     return new Promise((resolve, reject) => {
-        const claudeArgs = [
-            "--print",                    // non-interactive: read prompt from stdin, print result, exit
-            "--mcp-config", "claude_mcp.json",
-            "--dangerously-skip-permissions"
-        ];
+        const proc = runtime.spawn(spawnConfig);
 
-        // If GITHUB_TOKEN is missing, restrict tools to swarmbuild only.
-        if (!process.env.GITHUB_TOKEN) {
-            claudeArgs.push("--allowed-tools", "swarmbuild_create_tasks,swarmbuild_get_tasks,swarmbuild_claim_task,swarmbuild_complete_task,swarmbuild_send_message,swarmbuild_read_chat");
-        }
-
-        // stdin = "pipe" so we can write the prompt directly (bypasses shell escaping entirely)
-        const claude = spawn("claude", claudeArgs, {
-            cwd: WORKSPACE,
-            stdio: ["pipe", "pipe", "pipe"],
-            shell: true,
-            env: { ...process.env, CLAUDE_CONFIG_FILE: mcpConfigPath, FORCE_COLOR: "1" }
-        });
-
-        // Send the full prompt via stdin — no shell escaping, no truncation
-        claude.stdin.write(systemPrompt);
-        claude.stdin.end();
-
-        claude.stdout.on("data", (data) => {
+        let stdoutBuffer = "";
+        proc.stdout?.on("data", (data) => {
             const str = data.toString();
+            stdoutBuffer += str;
             process.stdout.write(str);
             api.publishLog(str).catch(() => { });
         });
 
-        claude.stderr.on("data", (data) => {
+        proc.stderr?.on("data", (data) => {
             const str = data.toString();
             process.stderr.write(str);
             api.publishLog(str).catch(() => { });
         });
 
-        claude.on("close", (code) => {
-            console.log(`[swarmbuild] Claude exited with code ${code}`);
+        proc.on("close", (code) => {
+            console.log(`[swarmbuild] ${runtime.name} exited with code ${code}`);
             api.publishLog(`SYSTEM: Agent exited with code ${code}`).catch(() => { });
+
+            // Parse token usage from output
+            try {
+                const parsed = runtime.parseOutput(stdoutBuffer);
+                if (parsed.tokensUsed > 0) {
+                    totalTokensUsed += parsed.tokensUsed;
+                }
+            } catch { /* ignore parse errors */ }
+
             resolve(code);
         });
 
-        claude.on("error", (err) => {
-            console.log(`[swarmbuild] Error spawning Claude Code. Is it installed? (npm i -g @anthropic-ai/claude-code)`);
+        proc.on("error", (err) => {
+            console.log(`[swarmbuild] Error spawning ${runtime.name}. Is it installed?`);
             reject(err);
         });
     });

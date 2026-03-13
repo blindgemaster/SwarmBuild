@@ -52,6 +52,53 @@ async function pushViaToken(githubToken, cwdPath) {
     await exec(`git push ${httpsUrl} HEAD:main`, { cwd });
 }
 
+// v2: Per-task token tracking
+let taskStartTokens = 0;
+let totalTokensUsed = 0;
+
+function getTotalTokensUsed() { return totalTokensUsed; }
+
+// Helper: push to a specific branch with retry (SSH key or token)
+async function pushToRemote(branchName, cwdPath) {
+    const githubToken = process.env.GITHUB_TOKEN || process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
+
+    // Check if remote exists
+    let hasRemote = false;
+    try {
+        await exec("git remote get-url origin", { cwd: cwdPath });
+        hasRemote = true;
+    } catch { /* no remote */ }
+    if (!hasRemote) return "No git remote configured — skipping push.";
+
+    // Try SSH deploy key first
+    const keyPath = path.join(cwdPath, ".deploy_key");
+    let hasKey = false;
+    try { await fs.access(keyPath); hasKey = true; } catch { /* no key */ }
+
+    if (hasKey) {
+        for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+                await runGitCommand(`git push origin HEAD:${branchName}`, cwdPath);
+                return `Successfully pushed to branch '${branchName}'.`;
+            } catch (e) {
+                if (attempt === 3) throw e;
+                await new Promise(r => setTimeout(r, attempt * 2000));
+            }
+        }
+    }
+
+    if (githubToken) {
+        const { stdout: remoteUrl } = await exec("git remote get-url origin", { cwd: cwdPath });
+        const repoPath = parseGithubRepo(remoteUrl);
+        if (!repoPath) throw new Error(`Could not parse GitHub repo from: ${remoteUrl.trim()}`);
+        const httpsUrl = `https://x-access-token:${githubToken}@github.com/${repoPath}.git`;
+        await exec(`git push ${httpsUrl} HEAD:${branchName}`, { cwd: cwdPath });
+        return `Successfully pushed to branch '${branchName}'.`;
+    }
+
+    return "Skipped git push: no GITHUB_TOKEN or deploy key available.";
+}
+
 export async function runMCPServer(relayUrl, workerToken, workspacePath) {
     const api = new SwarmbuildAPI(relayUrl);
     api.workerToken = workerToken; // Pretend we are already logged in to the worker
@@ -92,7 +139,7 @@ export async function runMCPServer(relayUrl, workerToken, workspacePath) {
                 },
                 {
                     name: "swarmbuild_create_tasks",
-                    description: "(Lead Only) Create tasks for the teammates",
+                    description: "(Lead Only) Create tasks for the teammates. Supports depends_on for task ordering.",
                     inputSchema: {
                         type: "object",
                         properties: {
@@ -101,9 +148,12 @@ export async function runMCPServer(relayUrl, workerToken, workspacePath) {
                                 items: {
                                     type: "object",
                                     properties: {
-                                        title: { type: "string" },
-                                        description: { type: "string" },
-                                        assigned_role: { type: "string" }
+                                        title: { type: "string", description: "Short task title" },
+                                        description: { type: "string", description: "Detailed task specification" },
+                                        assigned_role: { type: "string", description: "Role that should do this task (lead, backend, frontend, etc.)" },
+                                        depends_on: { type: "array", items: { type: "string" }, description: "Array of task IDs that must be completed before this task can be claimed" },
+                                        parallel_group: { type: "string", description: "Group label for tasks that can run in parallel" },
+                                        estimated_duration: { type: "number", description: "Estimated minutes to complete" }
                                     },
                                     required: ["title"]
                                 }
@@ -134,155 +184,135 @@ export async function runMCPServer(relayUrl, workerToken, workspacePath) {
         try {
             if (request.params.name === "swarmbuild_get_tasks") {
                 const tasks = await api.getTasks();
-                return { content: [{ type: "text", text: JSON.stringify(tasks, null, 2) }] };
+
+                // v2: Group by claimability for better display
+                const claimable = tasks.filter(t => t.is_claimable && t.status === "available");
+                const blocked = tasks.filter(t => !t.is_claimable && t.status === "available");
+                const inProgress = tasks.filter(t => t.status === "locked");
+                const completed = tasks.filter(t => t.status === "completed");
+                const failed = tasks.filter(t => t.status === "failed");
+
+                const formatted = `## Available Tasks (can claim now)
+${claimable.map(t => `- [${t.id.slice(0, 8)}] ${t.title} (${t.assigned_role || 'any'}) — priority: ${t.priority_score || 0}`).join("\n") || "None — waiting for dependencies"}
+
+## Blocked Tasks (dependencies incomplete)
+${blocked.map(t => `- [${t.id.slice(0, 8)}] ${t.title} — waiting on: ${(t.blocking_tasks || []).join(", ") || "unknown"}`).join("\n") || "None"}
+
+## In Progress
+${inProgress.map(t => `- [${t.id.slice(0, 8)}] ${t.title} (locked)`).join("\n") || "None"}
+
+## Completed
+${completed.map(t => `- [${t.id.slice(0, 8)}] ${t.title} ✅`).join("\n") || "None"}
+${failed.length ? `\n## Failed\n${failed.map(t => `- [${t.id.slice(0, 8)}] ${t.title} ❌`).join("\n")}` : ""}
+
+Full task data (JSON):
+${JSON.stringify(tasks, null, 2)}`;
+
+                return { content: [{ type: "text", text: formatted }] };
             }
 
             if (request.params.name === "swarmbuild_claim_task") {
-                const res = await api.claimTask(request.params.arguments.task_id);
+                const taskId = request.params.arguments.task_id;
+                const res = await api.claimTask(taskId);
 
-                // PHASE 10: AUTOMATIC GIT SYNC -> ROBUST CLAIM
+                // v2: Record token count at task start for per-task tracking
+                taskStartTokens = getTotalTokensUsed();
+
+                // v2: Branch-per-task git flow
+                const branchName = `task/${taskId.slice(0, 8)}`;
                 let gitStatus = "No git remote detected.";
                 try {
-                    // Stash any uncommitted work Claude might have started before pulling.
-                    // Use --include-untracked so it catches new files too. Ignore exit code
-                    // cross-platform by catching the error rather than relying on "|| true"
-                    // (which is bash-only and breaks on Windows cmd.exe).
+                    // Sync with main first
                     try { await runGitCommand("git stash --include-untracked", workspacePath); } catch { /* nothing to stash */ }
-                    await runGitCommand("git pull --rebase origin main", workspacePath);
+                    try {
+                        await runGitCommand("git fetch origin", workspacePath);
+                        await runGitCommand("git checkout main", workspacePath);
+                        await runGitCommand("git pull --rebase origin main", workspacePath);
+                    } catch { /* empty repo or no remote */ }
                     try { await runGitCommand("git stash pop", workspacePath); } catch { /* nothing stashed */ }
-                    gitStatus = "Successfully pulled latest code from other agents via GitHub.";
+
+                    // Create task branch from latest main
+                    try {
+                        await runGitCommand(`git checkout -b ${branchName}`, workspacePath);
+                    } catch {
+                        // Branch might already exist from a previous attempt
+                        await runGitCommand(`git checkout ${branchName}`, workspacePath);
+                        try { await runGitCommand("git rebase main", workspacePath); } catch { /* rebase conflict — continue on branch as-is */ }
+                    }
+                    gitStatus = `Working on branch '${branchName}'. Push here, server will merge to main.`;
                 } catch (err) {
-                    gitStatus = `Git pull failed: ${err.message}`;
-                    console.error("[MCP] Git Pull Error:", err.message);
+                    gitStatus = `Git branch setup failed: ${err.message}`;
+                    console.error("[MCP] Git Branch Error:", err.message);
                 }
+
+                // Include previous attempts for context
+                let previousAttempts = [];
+                let warning = null;
+                try {
+                    previousAttempts = res.previous_attempts || [];
+                    warning = res.warning || null;
+                } catch { /* ignore */ }
 
                 return {
                     content: [{
                         type: "text",
-                        text: JSON.stringify({ ...res, git_sync: gitStatus }, null, 2)
+                        text: JSON.stringify({
+                            ...res,
+                            branch: branchName,
+                            git_sync: gitStatus,
+                            previous_attempts: previousAttempts,
+                            warning,
+                        }, null, 2)
                     }]
                 };
             }
 
             if (request.params.name === "swarmbuild_complete_task") {
-                // PHASE 10: AUTOMATIC GIT SYNC -> ROBUST COMPLETE
+                const taskId = request.params.arguments.task_id;
+                const branchName = `task/${taskId.slice(0, 8)}`;
+
+                // v2: Compute per-task token usage
+                const taskTokens = getTotalTokensUsed() - taskStartTokens;
+
+                // v2: Commit and push to task branch (NOT main)
                 let gitStatus = "No git remote detected.";
                 try {
                     await runGitCommand("git add .", workspacePath);
-                    // Ignore "nothing to commit" — Node.js exec errors put git's stdout
-                    // in e.stdout (not e.message), so check both properties.
                     try {
-                        await runGitCommand(`git commit -m "Completed task: ${request.params.arguments.task_id}"`, workspacePath);
+                        await runGitCommand(
+                            `git commit -m "Complete: ${taskId}"`,
+                            workspacePath
+                        );
                     } catch (e) {
                         const nothingToCommit =
                             e.stdout?.includes("nothing to commit") ||
                             e.stderr?.includes("nothing to commit") ||
                             e.message?.includes("nothing to commit");
                         if (!nothingToCommit) throw e;
-                        // If nothing to commit, fall through to push — git push will
-                        // return "Everything up-to-date" (exit 0), which is fine.
                     }
 
-                    // Prefer HTTPS token push (GitHub MCP approach — reliable on all platforms,
-                    // no SSH key required). Fall back to SSH deploy key if present. Skip if neither.
-                    const githubToken = process.env.GITHUB_TOKEN || process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
+                    // Push to task branch (not main)
+                    gitStatus = await pushToRemote(branchName, workspacePath);
 
-                    // Check whether git remote exists at all
-                    let hasRemote = false;
+                    // Enqueue merge request on the server
                     try {
-                        await exec("git remote get-url origin", { cwd: workspacePath });
-                        hasRemote = true;
-                    } catch {
-                        // No remote configured — nothing to push
+                        await api.enqueueMerge(taskId, branchName);
+                        gitStatus += " Merge enqueued.";
+                    } catch (mergeErr) {
+                        gitStatus += ` (merge enqueue failed: ${mergeErr.message})`;
                     }
-
-                    if (!hasRemote) {
-                        gitStatus = "No git remote configured — skipping push.";
-                    } else if (!githubToken) {
-                        // Check if deploy key was written by setupWorkspace
-                        const keyPath = path.join(workspacePath, ".deploy_key");
-                        let hasKey = false;
-                        try { await fs.access(keyPath); hasKey = true; } catch { /* no key */ }
-
-                        if (!hasKey) {
-                            // Neither token nor SSH key — skip silently rather than failing
-                            gitStatus = "Skipped git push: no GITHUB_TOKEN set. Set GITHUB_TOKEN in your environment to enable automatic pushes.";
-                        } else {
-                            // SSH deploy key present — try 3x
-                            let pushed = false, lastError = "";
-                            for (let attempt = 1; attempt <= 3; attempt++) {
-                                try {
-                                    try { await runGitCommand("git pull --rebase origin main", workspacePath); } catch { /* empty repo */ }
-                                    await runGitCommand("git push origin main", workspacePath);
-                                    pushed = true;
-                                    break;
-                                } catch (e) {
-                                    lastError = e.message || String(e);
-                                    await new Promise(r => setTimeout(r, attempt * 2000));
-                                }
-                            }
-                            gitStatus = pushed
-                                ? "Successfully pushed your code to GitHub for other agents."
-                                : `Git push failed (SSH): ${lastError}`;
-                        }
-                    } else {
-                        // Token available — use HTTPS push (most reliable)
-                        let pushed = false, lastError = "";
-                        for (let attempt = 1; attempt <= 3; attempt++) {
-                            try {
-                                try { await runGitCommand("git pull --rebase origin main", workspacePath); } catch { /* empty repo */ }
-                                await pushViaToken(githubToken, workspacePath);
-                                pushed = true;
-                                break;
-                            } catch (e) {
-                                lastError = e.message || String(e);
-                                await new Promise(r => setTimeout(r, attempt * 2000));
-                            }
-                        }
-
-                        // If token push failed, try SSH deploy key as fallback
-                        // (token may lack write access to the job org but deploy key always has it)
-                        if (!pushed) {
-                            const keyPath = path.join(workspacePath, ".deploy_key");
-                            let hasKey = false;
-                            try { await fs.access(keyPath); hasKey = true; } catch { /* no key */ }
-
-                            if (hasKey) {
-                                let sshPushed = false, sshError = "";
-                                for (let attempt = 1; attempt <= 3; attempt++) {
-                                    try {
-                                        try { await runGitCommand("git pull --rebase origin main", workspacePath); } catch { /* empty repo */ }
-                                        await runGitCommand("git push origin main", workspacePath);
-                                        sshPushed = true;
-                                        break;
-                                    } catch (e) {
-                                        sshError = e.message || String(e);
-                                        await new Promise(r => setTimeout(r, attempt * 2000));
-                                    }
-                                }
-                                gitStatus = sshPushed
-                                    ? "Successfully pushed via deploy key (token had no org access)."
-                                    : `Git push failed — token: ${lastError} | SSH: ${sshError}`;
-                            } else {
-                                gitStatus = `Git push failed (token): ${lastError}`;
-                            }
-                        } else {
-                            gitStatus = "Successfully pushed your code to GitHub for other agents.";
-                        }
-                    }
-
 
                 } catch (err) {
                     gitStatus = `Git push failed: ${err.message}`;
                     console.error("[MCP] Git Push Error:", err.message);
                 }
 
-                const res = await api.completeTask(request.params.arguments.task_id, request.params.arguments.status);
+                const res = await api.completeTask(taskId, request.params.arguments.status, taskTokens);
 
                 return {
                     content: [{
                         type: "text",
-                        text: JSON.stringify({ ...res, git_sync: gitStatus }, null, 2)
+                        text: JSON.stringify({ ...res, git_sync: gitStatus, tokens_used: taskTokens, branch: branchName }, null, 2)
                     }]
                 };
             }

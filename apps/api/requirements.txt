@@ -9,3 +9,4 @@ python-dotenv==1.0.1
 pydantic-settings==2.7.1
 PyGithub==2.5.0
 python-multipart==0.0.20
+PyJWT==2.9.0

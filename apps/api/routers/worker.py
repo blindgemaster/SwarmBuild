@@ -4,10 +4,10 @@ Worker Protocol Router — Endpoints called by contributor Docker containers
 These endpoints are authenticated via worker_token (not user session).
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 
 from database import get_supabase
 
@@ -66,6 +66,10 @@ async def get_job_for_worker(token: str):
 class HeartbeatRequest(BaseModel):
     agents_running: int = 1
     tokens_used: int = 0
+    current_task_id: Optional[str] = None
+    status: str = "idle"  # idle, working, merging, waiting
+    sessions_run: int = 0
+    commits_pushed: int = 0
 
 
 @router.post("/heartbeat/{token}")
@@ -74,13 +78,60 @@ async def worker_heartbeat(token: str, req: HeartbeatRequest):
     contributor = _verify_token(token)
     db = get_supabase()
 
+    now = datetime.utcnow().isoformat()
+
+    # Update contributor record with v2 fields
     db.table("contributors").update({
-        "last_seen": datetime.utcnow().isoformat(),
+        "last_seen": now,
         "num_agents": req.agents_running,
         "tokens_used": req.tokens_used,
+        "sessions_run": req.sessions_run,
+        "commits_pushed": req.commits_pushed,
+        "current_task_id": req.current_task_id,
+        "contributor_status": "active",
     }).eq("id", contributor["id"]).execute()
 
-    return {"status": "ok"}
+    # Determine if server wants the agent to stop
+    job = contributor.get("jobs", {})
+    should_stop = False
+    stop_reason = None
+    pending_notifications: List[dict] = []
+
+    # Budget exhaustion check
+    job_budget = job.get("budget_cap") if job else None
+    if job_budget and req.tokens_used >= job_budget:
+        should_stop = True
+        stop_reason = "budget_exhausted"
+    elif job_budget:
+        # Budget warning at configured percentage
+        warning_pct = job.get("budget_warning_pct", 80) / 100
+        if req.tokens_used >= job_budget * warning_pct:
+            pending_notifications.append({
+                "type": "budget_warning",
+                "message": f"Budget is {int(req.tokens_used / job_budget * 100)}% used ({req.tokens_used:,}/{job_budget:,} tokens)"
+            })
+
+    # Job cancellation/completion check
+    if job and job.get("status") in ("cancelled", "complete", "failed"):
+        should_stop = True
+        stop_reason = f"job_{job.get('status')}"
+
+    # Token expiry check (warn 5 min before)
+    try:
+        expires = datetime.fromisoformat(contributor["token_expires"].replace("Z", "+00:00"))
+        if datetime.now(timezone.utc) > expires - timedelta(minutes=5):
+            should_stop = True
+            stop_reason = "token_expired"
+    except (KeyError, ValueError):
+        pass
+
+    return {
+        "status": "ok",
+        "server_time": now,
+        "should_stop": should_stop,
+        "stop_reason": stop_reason,
+        "pending_notifications": pending_notifications,
+    }
 
 
 class ProgressRequest(BaseModel):

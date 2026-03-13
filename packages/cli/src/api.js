@@ -72,8 +72,8 @@ export class SwarmbuildAPI {
         return res.data;
     }
 
-    async completeTask(taskId, status) {
-        const res = await this._fetchWithRetry('post', `/api/${this.workerToken}/tasks/${taskId}/complete`, { status });
+    async completeTask(taskId, status, tokensUsed = 0) {
+        const res = await this._fetchWithRetry('post', `/api/${this.workerToken}/tasks/${taskId}/complete`, { status, tokens_used: tokensUsed });
         return res.data;
     }
 
@@ -98,5 +98,42 @@ export class SwarmbuildAPI {
             headers: { 'Content-Type': 'text/plain' }
         });
         return res.data;
+    }
+
+    // --- v2: Heartbeat ---
+
+    async heartbeat({ agents_running = 1, tokens_used = 0, current_task_id = null, status = "idle", sessions_run = 0, commits_pushed = 0 } = {}) {
+        const res = await this._fetchWithRetry('post', `/api/worker/heartbeat/${this.workerToken}`, {
+            agents_running, tokens_used, current_task_id, status, sessions_run, commits_pushed,
+        });
+        return res.data;
+    }
+
+    // --- v2: Graceful Shutdown ---
+
+    async releaseAllMyTasks() {
+        const res = await this._fetchWithRetry('post', `/api/${this.workerToken}/tasks/release-all`);
+        return res.data;
+    }
+
+    async workerComplete(status, message = "") {
+        const res = await this._fetchWithRetry('post', `/api/worker/complete/${this.workerToken}`, { status, message });
+        return res.data;
+    }
+
+    // --- v2: Merge Queue ---
+
+    async enqueueMerge(taskId, branchName, commitSha = null) {
+        const res = await this._fetchWithRetry('post', `/api/${this.workerToken}/merge/enqueue`, {
+            task_id: taskId, branch_name: branchName, commit_sha: commitSha,
+        });
+        return res.data;
+    }
+
+    // --- v2: Task Attempts ---
+
+    async getTaskAttempts(taskId) {
+        const res = await this._fetchWithRetry('get', `/api/${this.workerToken}/tasks/${taskId}/attempts`);
+        return res.data.attempts;
     }
 }

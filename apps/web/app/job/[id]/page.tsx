@@ -14,6 +14,10 @@ import { PlanEditor } from "@/app/components/PlanEditor";
 import { CommentThread } from "@/app/components/CommentThread";
 import { VoteBox } from "@/app/components/VoteBox";
 import { LobbyChat } from "@/app/components/LobbyChat";
+import { CostDashboard } from "@/app/components/CostDashboard";
+import { ReviewPanel } from "@/app/components/ReviewPanel";
+import { MergeQueue } from "@/app/components/MergeQueue";
+import { AuditLog } from "@/app/components/AuditLog";
 
 function timeAgo(dateStr: string): string {
     const diff = Date.now() - new Date(dateStr).getTime();
@@ -315,6 +319,9 @@ export default function JobDetailPage() {
     if (job.status === "running" || job.status === "complete") {
         tabs.push({ key: "execution", label: "Execution", count: tasks.length });
     }
+    if (job.status === "running" || job.status === "complete") {
+        tabs.push({ key: "costs", label: "Costs" });
+    }
     tabs.push({ key: "discussion", label: "Discussion", count: comments.length });
 
     return (
@@ -545,8 +552,17 @@ export default function JobDetailPage() {
                         {activeTab === "execution" && (
                             <div className="flex flex-col gap-6">
                                 {tasks.length > 0 && <TaskBoard tasks={tasks} />}
+                                <ReviewPanel jobId={jobId} apiUrl={process.env.NEXT_PUBLIC_API_URL || "https://swarmbuild.onrender.com"} />
+                                <MergeQueue jobId={jobId} apiUrl={process.env.NEXT_PUBLIC_API_URL || "https://swarmbuild.onrender.com"} />
                                 <LobbyChat jobId={jobId} initialMessages={messages} />
                                 <LogViewer logs={logs} />
+                            </div>
+                        )}
+
+                        {activeTab === "costs" && (
+                            <div className="flex flex-col gap-6">
+                                <CostDashboard jobId={jobId} apiUrl={process.env.NEXT_PUBLIC_API_URL || "https://swarmbuild.onrender.com"} />
+                                <AuditLog jobId={jobId} apiUrl={process.env.NEXT_PUBLIC_API_URL || "https://swarmbuild.onrender.com"} />
                             </div>
                         )}
 

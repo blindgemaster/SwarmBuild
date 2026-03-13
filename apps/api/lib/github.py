@@ -62,6 +62,19 @@ def provision_job_repository(job_title: str):
     # We prefix to ensure it doesn't conflict if we run multiple times in dev
     repo.create_key(title=f"swarmbuild-worker-{os.urandom(4).hex()}", key=pub_key, read_only=False)
     
+    # v2: Set up branch protection on main — no direct pushes, only merge agent
+    try:
+        branch = repo.get_branch("main")
+        branch.edit_protection(
+            enforce_admins=False,
+            allow_force_pushes=False,
+            allow_deletions=False,
+        )
+        print(f"[github] Branch protection enabled on {repo_name}/main")
+    except Exception as e:
+        # Branch protection may fail on free plans or empty repos — non-fatal
+        print(f"[github] Could not set branch protection (non-fatal): {e}")
+    
     return {
         "repo_name": repo.full_name,
         "clone_url": repo.clone_url,
