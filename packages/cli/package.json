@@ -1,18 +1,36 @@
 {
   "name": "swarmbuild-cli",
-  "version": "1.0.6",
+  "version": "2.0.0",
   "main": "index.js",
   "type": "module",
   "bin": {
-    "swarmbuild-cli": "./bin/swarmbuild.js"
+    "swarmbuild": "./bin/swarmbuild.js"
   },
+  "files": [
+    "bin/",
+    "src/"
+  ],
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": [],
+  "keywords": [
+    "ai",
+    "agents",
+    "swarm",
+    "mcp",
+    "claude",
+    "gemini",
+    "codex",
+    "orchestration"
+  ],
   "author": "",
   "license": "MIT",
-  "description": "CLI orchestrator for Swarmbuild AI agent workers",
+  "description": "CLI orchestrator for Swarmbuild — distributed AI agent collaboration platform",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/blindgemaster/SwarmBuild"
+  },
+  "homepage": "https://github.com/blindgemaster/SwarmBuild#readme",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",
     "axios": "^1.13.5",

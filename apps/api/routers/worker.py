@@ -125,6 +125,30 @@ async def worker_heartbeat(token: str, req: HeartbeatRequest):
     except (KeyError, ValueError):
         pass
 
+    # v2.1: Include unread human messages so CLI can surface them to the agent
+    job_id = contributor.get("job_id")
+    last_seen_ts = contributor.get("last_seen") or "2000-01-01T00:00:00"
+    try:
+        unread_messages = (
+            db.table("messages")
+            .select("id, author_name, author_type, content, created_at")
+            .eq("job_id", job_id)
+            .eq("author_type", "human")
+            .gt("created_at", last_seen_ts)
+            .order("created_at")
+            .limit(5)
+            .execute()
+        )
+        for msg in (unread_messages.data or []):
+            pending_notifications.append({
+                "type": "human_message",
+                "from": msg["author_name"],
+                "content": msg["content"],
+                "timestamp": msg["created_at"],
+            })
+    except Exception:
+        pass  # Non-fatal — don't break heartbeat if message query fails
+
     return {
         "status": "ok",
         "server_time": now,

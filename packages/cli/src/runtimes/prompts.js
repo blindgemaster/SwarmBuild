@@ -42,36 +42,30 @@ export function buildPrompt(runtime, context) {
     }
 }
 
-function buildClaudePrompt(ctx) {
+function selectPrompt(ctx) {
     if (ctx.isPlanning && ctx.role === "lead") {
         return buildPlanningPrompt(ctx);
+    }
+    // Lead with other agents → coordinator mode
+    if (ctx.role === "lead" && !ctx.isSoloLead) {
+        return buildCoordinatorPrompt(ctx);
     }
     if (ctx.isSoloLead) {
         return buildSoloLeadPrompt(ctx);
     }
     return buildTeammatePrompt(ctx);
+}
+
+function buildClaudePrompt(ctx) {
+    return selectPrompt(ctx);
 }
 
 function buildGeminiPrompt(ctx) {
-    // Gemini works well with structured, concise prompts
-    if (ctx.isPlanning && ctx.role === "lead") {
-        return buildPlanningPrompt(ctx);
-    }
-    if (ctx.isSoloLead) {
-        return buildSoloLeadPrompt(ctx);
-    }
-    return buildTeammatePrompt(ctx);
+    return selectPrompt(ctx);
 }
 
 function buildCodexPrompt(ctx) {
-    // Codex prefers code-focused, minimal prompts
-    if (ctx.isPlanning && ctx.role === "lead") {
-        return buildPlanningPrompt(ctx);
-    }
-    if (ctx.isSoloLead) {
-        return buildSoloLeadPrompt(ctx);
-    }
-    return buildTeammatePrompt(ctx);
+    return selectPrompt(ctx);
 }
 
 function buildGenericPrompt(ctx) {
@@ -118,6 +112,35 @@ ${ctx.isSoloLead
 `;
 }
 
+function buildCoordinatorPrompt(ctx) {
+    return `# Swarmbuild — Coordinator Mode
+
+## Your Role
+You are the **COORDINATOR** for this job. Other agents are implementing tasks.
+Your job is to monitor progress, review work, respond to humans, and help stuck agents.
+
+## Every Cycle, Do This:
+1. Use swarmbuild_get_tasks to check overall progress.
+2. Use swarmbuild_read_chat to check for messages from humans or agents.
+3. If a human sent a message → respond via swarmbuild_send_message.
+4. If tasks are completed → send a progress update to chat.
+5. If tasks are available but unclaimed → note which roles are needed.
+6. If all tasks are done → send a completion summary.
+7. Check MESSAGES.md in this directory for any direct messages from humans.
+
+## When to Claim Tasks Yourself:
+- ONLY if no other agent is available for that role's tasks
+- OR if a task has been available and unclaimed for multiple cycles
+
+## Available MCP Tools
+- swarmbuild_get_tasks — Monitor all task progress (shows claimable/blocked/done)
+- swarmbuild_read_chat — Read messages from humans and agents
+- swarmbuild_send_message — Send status updates, respond to humans, guide agents
+- swarmbuild_claim_task — Only if tasks are orphaned and you need to do them yourself
+- swarmbuild_complete_task — Only if you personally implemented something
+`;
+}
+
 function buildSoloLeadPrompt(ctx) {
     return `# Swarmbuild — Execution Phase
 
@@ -134,6 +157,7 @@ You are the **LEAD AGENT** and the sole contributor on this job.
    c. Use swarmbuild_complete_task with the task ID and status "completed" when done. This pushes to your branch and enqueues a merge.
 4. Repeat step 3 until all tasks are complete.
 5. Use swarmbuild_send_message to report progress.
+6. Check MESSAGES.md for any messages from humans.
 
 ## Available MCP Tools
 - swarmbuild_get_tasks — List all tasks with dependency and claimability info
@@ -160,6 +184,8 @@ You are a **${ctx.role.toUpperCase()}** agent on this team.
    c. Use swarmbuild_complete_task with the task ID and status "completed" when done.
 4. Repeat step 3 until all your tasks are complete.
 5. Use swarmbuild_send_message if you need help or to report progress.
+6. Check MESSAGES.md for any messages from humans.
+7. Use swarmbuild_read_chat to see team discussion.
 
 ## Available MCP Tools
 - swarmbuild_get_tasks — List all tasks with dependency and claimability info

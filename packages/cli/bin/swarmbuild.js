@@ -4,6 +4,7 @@ import dotenv from "dotenv";
 import { runLobby } from "../src/orchestrator.js";
 import { listRuntimes } from "../src/runtimes/index.js";
 import { runMergeAgent } from "../src/merge-agent.js";
+import { runA2ATest } from "../src/a2a-test.js";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -49,6 +50,19 @@ program
         } catch (err) {
             const apiError = err.response?.data ? JSON.stringify(err.response.data) : err.message;
             console.error(`\n❌ Fatal Error: ${apiError}`);
+            process.exit(1);
+        }
+    });
+
+program
+    .command("a2a-test")
+    .description("Test the A2A protocol gateway")
+    .option("--relay <url>", "Swarmbuild API URL", process.env.SWARMBUILD_API_URL || "https://swarmbuild.onrender.com")
+    .action(async (options) => {
+        try {
+            await runA2ATest(options.relay);
+        } catch (err) {
+            console.error(`\n❌ A2A Test Error: ${err.message}`);
             process.exit(1);
         }
     });

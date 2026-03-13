@@ -156,6 +156,44 @@ async def _handle_task_send(req: A2ARequest, request: Request):
             )
             return to_a2a_response({"jobs": jobs.data, "count": len(jobs.data)}, req_id=req.id)
 
+        elif action == "join_job":
+            job_id = intent.get("job_id")
+            role = intent.get("role", "backend")
+            if not job_id:
+                return to_a2a_error(-32602, "Could not extract job_id from message. Say 'join job <uuid> as <role>'.", req.id)
+
+            # Verify job exists and is joinable
+            job_check = db.table("jobs").select("id, status, title").eq("id", job_id).execute()
+            if not job_check.data:
+                return to_a2a_error(-32000, f"Job {job_id} not found.", req.id)
+            if job_check.data[0]["status"] in ("complete", "failed", "cancelled"):
+                return to_a2a_error(-32000, f"Job is finished (status: {job_check.data[0]['status']}).", req.id)
+
+            # Create contributor record with a synthetic A2A user
+            import secrets
+            from datetime import datetime, timedelta
+            a2a_token = f"wt_{secrets.token_urlsafe(32)}"
+
+            db.table("contributors").insert({
+                "job_id": job_id,
+                "user_id": "00000000-0000-0000-0000-000000000000",
+                "worker_token": a2a_token,
+                "token_expires": (datetime.utcnow() + timedelta(hours=24)).isoformat(),
+                "role": role,
+                "is_ready": True,
+                "contributor_status": "active",
+            }).execute()
+
+            await manager.broadcast(job_id, {"type": "lobby_state_change"})
+
+            return to_a2a_response({
+                "status": "joined",
+                "worker_token": a2a_token,
+                "role": role,
+                "job_title": job_check.data[0]["title"],
+                "message": f"Joined job as {role}. Use this worker_token as Bearer token for authenticated requests.",
+            }, req_id=req.id)
+
         elif action == "get_tasks":
             if not worker_token:
                 return to_a2a_error(-32000, "Authentication required. Provide Bearer token.", req.id)

@@ -41,10 +41,11 @@ async def register_contributor(job_id: str, req: ContributeRequest, request: Req
         raise HTTPException(status_code=404, detail="Job not found")
 
     job = job_result.data[0]
-    if job["status"] not in ("approved", "running"):
+    # v2.1: Allow hot-joining running jobs (not just approved)
+    if job["status"] in ("complete", "failed", "cancelled"):
         raise HTTPException(
             status_code=400,
-            detail=f"Job is not accepting contributors (status: {job['status']})"
+            detail=f"Job is finished — cannot join (status: {job['status']})"
         )
 
     # Build cli command string (used for both new and existing)
@@ -83,12 +84,16 @@ async def register_contributor(job_id: str, req: ContributeRequest, request: Req
     # Create contributor record
     worker_token = _generate_worker_token()
 
+    # v2.1: Hot-joiners on running jobs are auto-ready + active
+    is_hot_join = job["status"] == "running"
+
     contributor = {
         "job_id": job_id,
         "user_id": user_id,
         "worker_token": worker_token,
         "role": req.role,
-        "is_ready": False,
+        "is_ready": True if is_hot_join else False,
+        "contributor_status": "active" if is_hot_join else "registered",
         "token_expires": (datetime.utcnow() + timedelta(hours=24)).isoformat(),
     }
     try:

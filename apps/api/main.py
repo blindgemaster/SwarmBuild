@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse
 from config import get_settings
 from routers import auth, jobs, plans, contributors, worker, logs, credits, community, tasks, messages, profiles, merge, costs, verification, events, a2a
 from lib.watchdog import watchdog_loop
+from lib.merge_processor import merge_processor_loop
 from middleware.audit import AuditMiddleware
 from middleware.rate_limit import RateLimitMiddleware
 
@@ -34,12 +35,21 @@ async def lifespan(app: FastAPI):
     watchdog_task = asyncio.create_task(watchdog_loop())
     print("[api] Watchdog started (checking every 60s)")
 
+    # Start auto-merge processor
+    merge_task = asyncio.create_task(merge_processor_loop())
+    print("[api] Merge processor started (checking every 15s)")
+
     yield
 
-    # Cancel watchdog on shutdown
+    # Cancel background tasks on shutdown
     watchdog_task.cancel()
+    merge_task.cancel()
     try:
         await watchdog_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await merge_task
     except asyncio.CancelledError:
         pass
     print("[api] Swarmbuild API shutting down...")

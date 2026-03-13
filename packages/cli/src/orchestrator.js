@@ -38,10 +38,26 @@ function startHeartbeat(api) {
                 await gracefulShutdown(api, response.stop_reason);
             }
 
-            // Budget warnings
+            // Process notifications
             if (response.pending_notifications) {
+                const humanMessages = [];
                 for (const notif of response.pending_notifications) {
-                    console.log(`[swarmbuild] ⚠️ ${notif.message}`);
+                    if (notif.type === "human_message") {
+                        humanMessages.push(notif);
+                        console.log(`[swarmbuild] 📨 Message from ${notif.from}: ${notif.content}`);
+                    } else {
+                        console.log(`[swarmbuild] ⚠️ ${notif.message}`);
+                    }
+                }
+                // v2.1: Write human messages to MESSAGES.md so agents can read them
+                if (humanMessages.length > 0 && WORKSPACE) {
+                    try {
+                        const content = humanMessages
+                            .map(m => `**${m.from}** (${m.timestamp}):\n${m.content}`)
+                            .join("\n\n---\n\n");
+                        const msgPath = path.join(WORKSPACE, "MESSAGES.md");
+                        await fs.appendFile(msgPath, `\n\n---\n\n${content}\n`);
+                    } catch { /* non-fatal */ }
                 }
             }
         } catch (err) {
@@ -158,53 +174,166 @@ export async function runLobby(jobId, options) {
     registerShutdownHandlers(api);
     console.log(`[swarmbuild] Heartbeat started (every 30s)`);
 
-    // 4. Pre-Run Lobby Loop
-    if (role === 'lead') {
-        console.log(`\n[swarmbuild] You are the LEAD. Launching ${runtimeName} to propose the Agent Team Plan...`);
-        await startAgentInteractive(api, role, jobInfo, true, WORKSPACE, runtimeName);
-        console.log(`\n[swarmbuild] ℹ️ Tip: The agent operates fully autonomously and exits when its instruction finishes.`);
-        console.log(`[swarmbuild] Plan proposed! Now chat with humans on the website.`);
-    } else {
-        console.log(`\n[swarmbuild] You are a TEAMMATE(${role}).Waiting in the Lobby...`);
-        console.log(`[swarmbuild] Go to the Swarmbuild Web UI to see the plan and chat.`);
-    }
-
-    console.log(`\n[swarmbuild] Press ENTER to Mark Ready(Make sure everyone agrees on the plan!)`);
-
-    // Wait for ENTER
-    process.stdin.resume();
-    await new Promise(resolve => process.stdin.once('data', resolve));
-    process.stdin.pause();
-
-    console.log(`[swarmbuild] Marking Ready...`);
-    let readyState;
+    // v2.1: Check if job is already executing (hot-join)
+    let isHotJoin = false;
     try {
-        readyState = await api.setReady(jobId, true);
-    } catch (e) {
-        console.log(`[swarmbuild] ❌ Error marking ready: ${e?.response?.data?.detail || e.message}`);
-        console.log(`[swarmbuild] Make sure you aren't trying to claim a role that is already full! Please try again.`);
-        return;
-    }
-
-    if (readyState.all_ready) {
-        console.log(`[swarmbuild] 🚀 All contributors ready! Execution starting...`);
-    } else {
-        console.log(`[swarmbuild] ⏳ Waiting for OTHER required contributors to mark ready...`);
-        console.log(`[swarmbuild] Ensure all roles defined in the plan have joined and clicked Ready in the Web UI!`);
-        // Simple poll
-        while (true) {
-            await new Promise(r => setTimeout(r, 3000));
-            // In a real app we'd websocket this, but polling for MVP is okay
-            const check = await api.client.get(`/api/jobs/${jobId}`);
-            if (check.data.lobby_state === 'executing') break;
+        const jobCheck = await api.client.get(`/api/jobs/${jobId}`);
+        if (jobCheck.data.lobby_state === 'executing' || jobCheck.data.status === 'running') {
+            isHotJoin = true;
         }
-        console.log(`[swarmbuild] 🚀 Execution starting...`);
+    } catch { /* ignore */ }
+
+    if (isHotJoin) {
+        console.log(`[swarmbuild] 🔥 Hot-joining a running job — skipping lobby, jumping to execution!`);
+    } else {
+        // 4. Normal Pre-Run Lobby Loop
+        if (role === 'lead') {
+            console.log(`\n[swarmbuild] You are the LEAD. Launching ${runtimeName} to propose the Agent Team Plan...`);
+            await startAgentInteractive(api, role, jobInfo, true, WORKSPACE, runtimeName);
+            console.log(`\n[swarmbuild] ℹ️ Tip: The agent operates fully autonomously and exits when its instruction finishes.`);
+            console.log(`[swarmbuild] Plan proposed! Now chat with humans on the website.`);
+        } else {
+            console.log(`\n[swarmbuild] You are a TEAMMATE(${role}).Waiting in the Lobby...`);
+            console.log(`[swarmbuild] Go to the Swarmbuild Web UI to see the plan and chat.`);
+        }
+
+        console.log(`\n[swarmbuild] Press ENTER to Mark Ready(Make sure everyone agrees on the plan!)`);
+
+        // Wait for ENTER
+        process.stdin.resume();
+        await new Promise(resolve => process.stdin.once('data', resolve));
+        process.stdin.pause();
+
+        console.log(`[swarmbuild] Marking Ready...`);
+        let readyState;
+        try {
+            readyState = await api.setReady(jobId, true);
+        } catch (e) {
+            console.log(`[swarmbuild] ❌ Error marking ready: ${e?.response?.data?.detail || e.message}`);
+            console.log(`[swarmbuild] Make sure you aren't trying to claim a role that is already full! Please try again.`);
+            return;
+        }
+
+        if (readyState.all_ready) {
+            console.log(`[swarmbuild] 🚀 All contributors ready! Execution starting...`);
+        } else {
+            console.log(`[swarmbuild] ⏳ Waiting for OTHER required contributors to mark ready...`);
+            console.log(`[swarmbuild] Ensure all roles defined in the plan have joined and clicked Ready in the Web UI!`);
+            while (true) {
+                await new Promise(r => setTimeout(r, 3000));
+                const check = await api.client.get(`/api/jobs/${jobId}`);
+                if (check.data.lobby_state === 'executing') break;
+            }
+            console.log(`[swarmbuild] 🚀 Execution starting...`);
+        }
     }
 
-    // 5. Execution Loop
-    console.log(`[swarmbuild] Entering continuous execution loop...`);
+    // 5. Determine execution mode: coordinator (lead with team) vs worker
+    const isSoloLead = role === 'lead' && (
+        !jobInfo.required_roles?.length ||
+        jobInfo.required_roles.length === 1 ||
+        jobInfo.required_roles.every(r => r === 'lead')
+    );
+
+    // Check if other agents are active (lead becomes coordinator if so)
+    let isCoordinator = false;
+    if (role === 'lead' && !isSoloLead) {
+        try {
+            const contribs = await api.client.get(`/api/jobs/${jobId}/contributors`);
+            const others = (contribs.data.contributors || []).filter(c =>
+                c.role !== 'lead' && !c.left_at
+            );
+            isCoordinator = others.length > 0;
+        } catch { /* fallback to worker mode */ }
+    }
+
+    if (isCoordinator) {
+        console.log(`[swarmbuild] 🎯 Lead entering COORDINATOR mode (other agents are working)...`);
+        await runCoordinatorLoop(api, role, jobInfo, WORKSPACE, runtimeName, jobId);
+    } else {
+        console.log(`[swarmbuild] Entering worker execution loop...`);
+        await runWorkerLoop(api, role, jobInfo, WORKSPACE, runtimeName, isSoloLead);
+    }
+
+    // Clean shutdown after all tasks done
+    stopHeartbeat();
+    try {
+        await api.workerComplete("complete", "All tasks completed");
+    } catch { /* ignore */ }
+}
+
+// ── v2.1: Coordinator loop — lead monitors, reviews, helps instead of idling ──
+async function runCoordinatorLoop(api, role, jobInfo, WORKSPACE, runtimeName, jobId) {
+    let lastCompletedCount = 0;
+
     while (true) {
-        // Fetch tasks to check status
+        let tasks = [];
+        try {
+            tasks = await api.getTasks();
+        } catch (e) {
+            console.log(`[swarmbuild] Error fetching tasks: ${e.message}. Retrying...`);
+            await new Promise(r => setTimeout(r, 5000));
+            continue;
+        }
+
+        const pending = tasks.filter(t => t.status === 'available' || t.status === 'locked');
+        const completed = tasks.filter(t => t.status === 'completed');
+
+        // All tasks done
+        if (pending.length === 0 && tasks.length > 0) {
+            console.log(`\n[swarmbuild] 🎉 All tasks complete! Coordinator signing off.`);
+            // One final coordinator session to send summary
+            sessionCount++;
+            await startAgentInteractive(api, role, jobInfo, false, WORKSPACE, runtimeName);
+            break;
+        }
+
+        // No tasks yet — wait
+        if (tasks.length === 0) {
+            console.log(`[swarmbuild] ⏳ No tasks created yet. Waiting...`);
+            await new Promise(r => setTimeout(r, 5000));
+            continue;
+        }
+
+        // Check if something changed since last cycle (new completions, etc.)
+        const hasNewCompletions = completed.length > lastCompletedCount;
+        lastCompletedCount = completed.length;
+
+        // Check for unread human messages
+        let hasHumanMessages = false;
+        try {
+            const msgs = await api.getMessages();
+            const recent = msgs.filter(m =>
+                m.author_type === 'human' &&
+                Date.now() - new Date(m.created_at).getTime() < 60_000
+            );
+            hasHumanMessages = recent.length > 0;
+        } catch { /* ignore */ }
+
+        // Orphaned tasks: available for >2 minutes with no one claiming them
+        const orphaned = tasks.filter(t =>
+            t.status === 'available' && t.is_claimable !== false
+        );
+
+        // Spawn coordinator session if there's work to do
+        if (hasNewCompletions || hasHumanMessages || orphaned.length > 0) {
+            console.log(`[swarmbuild] 📋 Coordinator cycle: ${completed.length} done, ${pending.length} pending` +
+                (hasHumanMessages ? ', new human messages' : '') +
+                (orphaned.length > 0 ? `, ${orphaned.length} orphaned tasks` : ''));
+            sessionCount++;
+            await startAgentInteractive(api, role, jobInfo, false, WORKSPACE, runtimeName);
+        } else {
+            console.log(`[swarmbuild] 📋 Coordinator: ${completed.length}/${tasks.length} tasks done. Monitoring...`);
+        }
+
+        // Coordinator checks every 30 seconds (not 10s idle spam)
+        await new Promise(r => setTimeout(r, 30_000));
+    }
+}
+
+// ── Worker loop — claim, implement, complete ──
+async function runWorkerLoop(api, role, jobInfo, WORKSPACE, runtimeName, isSoloLead) {
+    while (true) {
         let tasks = [];
         try {
             tasks = await api.getTasks();
@@ -217,27 +346,19 @@ export async function runLobby(jobId, options) {
         const pendingTasks = tasks.filter(t => t.status === 'available' || t.status === 'locked');
         if (pendingTasks.length === 0) {
             if (tasks.length === 0) {
-                // Lead agent hasn't created tasks yet — wait rather than exit
                 console.log(`[swarmbuild] ⏳ No tasks created yet. Waiting for lead agent to create tasks...`);
                 await new Promise(r => setTimeout(r, 5000));
                 continue;
             }
-            // Every task is in a terminal state (completed / failed)
             console.log(`\n[swarmbuild] 🎉 All tasks for the job are complete! Exiting gracefully...`);
             break;
         }
 
-        // A solo lead (the only required role) takes all tasks regardless of assigned_role
-        const isSoloLead = role === 'lead' && (
-            !jobInfo.required_roles?.length ||
-            jobInfo.required_roles.length === 1 ||
-            jobInfo.required_roles.every(r => r === 'lead')
-        );
         const myRoleTasks = isSoloLead
             ? pendingTasks
             : pendingTasks.filter(t => t.assigned_role === role);
         if (myRoleTasks.length === 0) {
-            console.log(`[swarmbuild] ⏳ No pending tasks for role '${role}'. Sleeping for 10 seconds before checking again...`);
+            console.log(`[swarmbuild] ⏳ No pending tasks for role '${role}'. Sleeping 10s...`);
             await new Promise(r => setTimeout(r, 10000));
             continue;
         }
@@ -246,16 +367,10 @@ export async function runLobby(jobId, options) {
         const exitCode = await startAgentInteractive(api, role, jobInfo, false, WORKSPACE, runtimeName);
 
         if (exitCode !== 0) {
-            console.log(`[swarmbuild] Agent exited with code ${exitCode}. Pausing for 5s before loop restarts...`);
+            console.log(`[swarmbuild] Agent exited with code ${exitCode}. Pausing 5s...`);
             await new Promise(r => setTimeout(r, 5000));
         }
     }
-
-    // Clean shutdown after all tasks done
-    stopHeartbeat();
-    try {
-        await api.workerComplete("complete", "All tasks completed");
-    } catch { /* ignore */ }
 }
 
 async function setupWorkspace(jobInfo, WORKSPACE) {

@@ -134,7 +134,7 @@ async def claim_task(token: str, task_id: str):
     if task["status"] != "available":
         raise HTTPException(status_code=409, detail=f"Task is already {task['status']}")
 
-    # Check dependencies are met
+    # Check dependencies are met (task completed AND merge finished)
     depends_on = task.get("depends_on") or []
     if depends_on:
         deps_result = (
@@ -144,10 +144,28 @@ async def claim_task(token: str, task_id: str):
             .execute()
         )
         incomplete = [d for d in deps_result.data if d["status"] != "completed"]
+
+        # v2.1: Also check that completed deps have been merged
+        if not incomplete:
+            for dep in deps_result.data:
+                merge_check = (
+                    db.table("merge_queue")
+                    .select("status")
+                    .eq("task_id", dep["id"])
+                    .execute()
+                )
+                # If there's a merge queue entry that isn't merged yet, block
+                if merge_check.data and merge_check.data[0]["status"] not in ("merged",):
+                    incomplete.append({
+                        "id": dep["id"],
+                        "title": dep["title"],
+                        "status": f"completed but merge {merge_check.data[0]['status']}",
+                    })
+
         if incomplete:
             raise HTTPException(status_code=409, detail={
                 "error": "dependencies_not_met",
-                "message": f"Cannot claim: {len(incomplete)} dependency task(s) not completed",
+                "message": f"Cannot claim: {len(incomplete)} dependency task(s) not ready",
                 "blocking_tasks": [
                     {"id": d["id"], "title": d["title"], "status": d["status"]}
                     for d in incomplete

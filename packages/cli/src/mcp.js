@@ -253,6 +253,20 @@ ${JSON.stringify(tasks, null, 2)}`;
                     warning = res.warning || null;
                 } catch { /* ignore */ }
 
+                // v2.1: Include recent commits from main so agent knows what others have done
+                let recentCommits = "";
+                try {
+                    const { stdout } = await exec(
+                        'git log --oneline -10 origin/main',
+                        { cwd: workspacePath }
+                    );
+                    recentCommits = stdout.trim();
+                } catch { /* no commits yet or no remote */ }
+
+                const contextMessage = recentCommits
+                    ? `Other agents have already committed:\n${recentCommits}\n\nYour work should build on top of theirs.`
+                    : "You're the first agent to work on this codebase.";
+
                 return {
                     content: [{
                         type: "text",
@@ -262,6 +276,8 @@ ${JSON.stringify(tasks, null, 2)}`;
                             git_sync: gitStatus,
                             previous_attempts: previousAttempts,
                             warning,
+                            recent_commits: recentCommits,
+                            context: contextMessage,
                         }, null, 2)
                     }]
                 };
@@ -289,6 +305,15 @@ ${JSON.stringify(tasks, null, 2)}`;
                             e.stderr?.includes("nothing to commit") ||
                             e.message?.includes("nothing to commit");
                         if (!nothingToCommit) throw e;
+                    }
+
+                    // v2.1: Rebase on latest main before pushing (picks up other agents' merged work)
+                    try {
+                        await runGitCommand("git fetch origin", workspacePath);
+                        await runGitCommand("git rebase origin/main", workspacePath);
+                    } catch {
+                        // Rebase conflict — abort and push as-is, merge queue will handle it
+                        try { await runGitCommand("git rebase --abort", workspacePath); } catch { /* already clean */ }
                     }
 
                     // Push to task branch (not main)
