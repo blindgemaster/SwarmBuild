@@ -9,6 +9,8 @@ interface TaskV2 extends Task {
     blocking_tasks?: string[];
     priority_score?: number;
     verification_status?: string;
+    locked_by_role?: string;
+    locked_by_status?: string;
 }
 
 export function TaskBoard({ tasks }: { tasks: Task[] }) {
@@ -140,6 +142,12 @@ function TaskCard({ task, accentColor, blocked }: { task: Task; accentColor?: st
                 {blocked && v2.blocking_tasks && v2.blocking_tasks.length > 0 && (
                     <span className="text-[10px] text-[var(--text-muted)] truncate max-w-[120px]" title={v2.blocking_tasks.join(", ")}>
                         waiting: {v2.blocking_tasks[0]}{v2.blocking_tasks.length > 1 ? ` +${v2.blocking_tasks.length - 1}` : ""}
+                    </span>
+                )}
+                {task.status === "locked" && v2.locked_by_role && (
+                    <span className="text-[10px] text-[var(--orange)] font-medium capitalize">
+                        {v2.locked_by_status === "disconnected" ? "⚠ " : ""}
+                        {v2.locked_by_role} agent
                     </span>
                 )}
                 {v2.verification_status && v2.verification_status !== "none" && (

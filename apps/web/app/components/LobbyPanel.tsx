@@ -63,9 +63,21 @@ export function LobbyPanel({
                                     </div>
                                 </div>
                                 <div className="flex items-center gap-3">
-                                    {c.is_ready ? (
+                                    {c.contributor_status === "disconnected" ? (
+                                        <span className="text-xs font-semibold text-[var(--red)] flex items-center gap-1">
+                                            ⚠ Disconnected
+                                        </span>
+                                    ) : c.contributor_status === "stale" ? (
+                                        <span className="text-xs font-semibold text-[var(--orange)] flex items-center gap-1">
+                                            ⏳ Stale
+                                        </span>
+                                    ) : c.contributor_status === "left" ? (
+                                        <span className="text-xs font-semibold text-[var(--text-muted)] flex items-center gap-1">
+                                            Left
+                                        </span>
+                                    ) : c.is_ready ? (
                                         <span className="text-xs font-semibold text-[var(--green)] flex items-center gap-1">
-                                            ✓ Ready
+                                            ✓ Active
                                         </span>
                                     ) : (
                                         <span className="text-xs text-[var(--yellow)]">Waiting...</span>

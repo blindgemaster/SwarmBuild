@@ -444,10 +444,11 @@ async function setupWorkspace(jobInfo, WORKSPACE) {
         console.log(`[swarmbuild] No GitHub repository configured, using local folder.`);
     }
 
-    // Write .gitignore so sensitive runtime files are never accidentally committed.
-    // Do this unconditionally (git and non-git workspaces both benefit).
+    // Write .gitignore ALWAYS — append swarmbuild entries if file already exists.
+    // This MUST happen before any git operations so runtime files are never staged.
     const gitignorePath = path.join(WORKSPACE, ".gitignore");
-    const gitignoreContent = [
+    const swarmbuildIgnore = [
+        "",
         "# Swarmbuild runtime files — do not commit",
         ".deploy_key",
         "claude_mcp.json",
@@ -457,13 +458,16 @@ async function setupWorkspace(jobInfo, WORKSPACE) {
         "AGENT_PROMPT.md",
         "TASK_LIST.md",
         "SYSTEM_PROMPT.md",
+        "MESSAGES.md",
         "",
     ].join("\n");
-    // Only write if it doesn't already exist so we don't clobber a project's own .gitignore
     try {
-        await fs.access(gitignorePath);
+        const existing = await fs.readFile(gitignorePath, "utf8").catch(() => "");
+        if (!existing.includes("Swarmbuild runtime files")) {
+            await fs.writeFile(gitignorePath, existing + swarmbuildIgnore, "utf8");
+        }
     } catch {
-        await fs.writeFile(gitignorePath, gitignoreContent, "utf8");
+        await fs.writeFile(gitignorePath, swarmbuildIgnore.trim() + "\n", "utf8");
     }
 
     // Write prompt AT THE END so it doesn't dirty the working tree before git checkout/pull

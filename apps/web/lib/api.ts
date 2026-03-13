@@ -115,6 +115,7 @@ export interface Contributor {
     tokens_used: number;
     sessions_run: number;
     commits_pushed: number;
+    contributor_status?: string;
     profile?: { username: string; display_name: string; avatar_url: string };
 }
 

@@ -244,7 +244,7 @@ async def list_contributors(job_id: str):
     # Fetch contributors (no FK join available in schema cache, so we enrich manually)
     result = (
         db.table("contributors")
-        .select("id, user_id, joined_at, last_seen, num_agents, tokens_used, sessions_run, commits_pushed, role, is_ready")
+        .select("id, user_id, joined_at, last_seen, num_agents, tokens_used, sessions_run, commits_pushed, role, is_ready, contributor_status")
         .eq("job_id", job_id)
         .is_("left_at", "null")
         .order("joined_at")

@@ -101,6 +101,51 @@ async def get_tasks(token: str):
         .execute()
     )
 
+    # Auto-release tasks locked by disconnected/left agents
+    for task in result.data:
+        if task["status"] == "locked" and task.get("locked_by_token"):
+            locker = (
+                db.table("contributors")
+                .select("contributor_status")
+                .eq("worker_token", task["locked_by_token"])
+                .execute()
+            )
+            if locker.data and locker.data[0].get("contributor_status") in ("disconnected", "left"):
+                db.table("tasks").update({
+                    "status": "available",
+                    "locked_by_token": None,
+                    "updated_at": datetime.utcnow().isoformat(),
+                }).eq("id", task["id"]).execute()
+                task["status"] = "available"
+                task["locked_by_token"] = None
+                db.table("task_attempts").insert({
+                    "task_id": task["id"],
+                    "worker_token": task.get("locked_by_token", "unknown"),
+                    "outcome": "agent_disconnected",
+                    "log_summary": "Auto-released: agent disconnected",
+                }).execute()
+
+    # Enrich with contributor info for UI (who has which task)
+    contrib_tokens = list({t["locked_by_token"] for t in result.data if t.get("locked_by_token")})
+    contrib_map = {}
+    if contrib_tokens:
+        contribs = (
+            db.table("contributors")
+            .select("worker_token, role, contributor_status")
+            .in_("worker_token", contrib_tokens)
+            .execute()
+        )
+        contrib_map = {c["worker_token"]: c for c in contribs.data}
+
+    for task in result.data:
+        tok = task.get("locked_by_token")
+        if tok and tok in contrib_map:
+            task["locked_by_role"] = contrib_map[tok].get("role")
+            task["locked_by_status"] = contrib_map[tok].get("contributor_status")
+        else:
+            task["locked_by_role"] = None
+            task["locked_by_status"] = None
+
     # Enrich tasks with DAG info (is_claimable, blocking_tasks, priority_score)
     enriched = enrich_tasks_with_dag_info(result.data)
 

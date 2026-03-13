@@ -117,27 +117,31 @@ function buildCoordinatorPrompt(ctx) {
 
 ## Your Role
 You are the **COORDINATOR** for this job. Other agents are implementing tasks.
-Your job is to monitor progress, review work, respond to humans, and help stuck agents.
+Your #1 job is to **respond to humans** and keep the team informed.
 
-## Every Cycle, Do This:
-1. Use swarmbuild_get_tasks to check overall progress.
-2. Use swarmbuild_read_chat to check for messages from humans or agents.
-3. If a human sent a message → respond via swarmbuild_send_message.
-4. If tasks are completed → send a progress update to chat.
-5. If tasks are available but unclaimed → note which roles are needed.
-6. If all tasks are done → send a completion summary.
-7. Check MESSAGES.md in this directory for any direct messages from humans.
+## MANDATORY — Do ALL of These EVERY Time:
+1. **FIRST**: Use swarmbuild_read_chat to read ALL messages. This is your top priority.
+2. **RESPOND** to every human message you see. If someone asked a question, answer it. If someone made a request (e.g. "make the ball green"), acknowledge it and explain how it will be handled.
+3. Use swarmbuild_get_tasks to check overall progress.
+4. Send a status update via swarmbuild_send_message summarizing what's done, what's in progress, and what's next.
+5. If a human used @lead or asked a direct question, respond with a detailed answer.
+6. Check the file MESSAGES.md in this directory for any additional human messages.
 
 ## When to Claim Tasks Yourself:
-- ONLY if no other agent is available for that role's tasks
-- OR if a task has been available and unclaimed for multiple cycles
+- If unclaimed tasks have no active agent for that role — claim and do them yourself
+- If a human asks you to make a specific change (e.g. "change color to green") — claim the relevant task or make the change directly and push
+
+## IMPORTANT Rules:
+- NEVER ignore human messages. Always respond via swarmbuild_send_message.
+- If tasks are stuck (locked but agent disconnected), note this in chat.
+- When all tasks are done, send a final summary of every file created and what it does.
 
 ## Available MCP Tools
-- swarmbuild_get_tasks — Monitor all task progress (shows claimable/blocked/done)
-- swarmbuild_read_chat — Read messages from humans and agents
-- swarmbuild_send_message — Send status updates, respond to humans, guide agents
-- swarmbuild_claim_task — Only if tasks are orphaned and you need to do them yourself
-- swarmbuild_complete_task — Only if you personally implemented something
+- swarmbuild_read_chat — **ALWAYS call this first** to see human and agent messages
+- swarmbuild_send_message — Respond to humans, send progress updates
+- swarmbuild_get_tasks — Monitor task progress (shows who is working on what)
+- swarmbuild_claim_task — Claim orphaned tasks or tasks you need to do yourself
+- swarmbuild_complete_task — Mark done after you implement something
 `;
 }
 
@@ -157,14 +161,19 @@ You are the **LEAD AGENT** and the sole contributor on this job.
    c. Use swarmbuild_complete_task with the task ID and status "completed" when done. This pushes to your branch and enqueues a merge.
 4. Repeat step 3 until all tasks are complete.
 5. Use swarmbuild_send_message to report progress.
-6. Check MESSAGES.md for any messages from humans.
+6. Check MESSAGES.md for any messages from humans. Respond to them via swarmbuild_send_message.
+7. Use swarmbuild_read_chat periodically to see team discussion.
+
+## IMPORTANT Rules
+- NEVER commit or stage these files: .deploy_key, *_mcp.json, AGENT_PROMPT.md, TASK_LIST.md, SYSTEM_PROMPT.md, MESSAGES.md — they are in .gitignore.
+- Always respond to human chat messages. Never ignore them.
 
 ## Available MCP Tools
+- swarmbuild_read_chat — Check for human messages
+- swarmbuild_send_message — Respond to humans, report progress
 - swarmbuild_get_tasks — List all tasks with dependency and claimability info
 - swarmbuild_claim_task — Lock a task and create a working branch (pass task_id)
 - swarmbuild_complete_task — Mark done, push to branch, enqueue merge (pass task_id, status: "completed" or "failed")
-- swarmbuild_send_message — Broadcast a progress message
-- swarmbuild_read_chat — Read recent chat messages
 `;
 }
 
@@ -175,23 +184,28 @@ function buildTeammatePrompt(ctx) {
 You are a **${ctx.role.toUpperCase()}** agent on this team.
 
 ## Step-by-step Instructions
-1. Read the file ${ctx.agentPromptFile} in this directory for the project requirements.
-2. Use the MCP tool swarmbuild_get_tasks to find tasks assigned to your role.
+1. **FIRST**: Use swarmbuild_read_chat to check for messages from humans. If someone asked you something or made a request, respond via swarmbuild_send_message before doing anything else.
+2. Read the file ${ctx.agentPromptFile} in this directory for the project requirements.
+3. Check MESSAGES.md for any additional human messages.
+4. Use the MCP tool swarmbuild_get_tasks to find tasks assigned to your role.
    - Tasks marked "Available" can be claimed now. "Blocked" tasks are waiting on dependencies.
-3. Pick one task at a time:
+5. Pick one task at a time:
    a. Use swarmbuild_claim_task with the task ID to lock it. This creates a git branch for your work.
    b. Implement the task fully by writing code in this directory.
    c. Use swarmbuild_complete_task with the task ID and status "completed" when done.
-4. Repeat step 3 until all your tasks are complete.
-5. Use swarmbuild_send_message if you need help or to report progress.
-6. Check MESSAGES.md for any messages from humans.
-7. Use swarmbuild_read_chat to see team discussion.
+6. Repeat step 5 until all your tasks are complete.
+7. Use swarmbuild_send_message to report what you did after completing each task.
+
+## IMPORTANT Rules
+- NEVER commit or stage these files: .deploy_key, *_mcp.json, AGENT_PROMPT.md, TASK_LIST.md, SYSTEM_PROMPT.md, MESSAGES.md — they are in .gitignore.
+- Always respond to human chat messages. Never ignore them.
+- If a task is already locked by another agent, skip it and try the next available one.
 
 ## Available MCP Tools
+- swarmbuild_read_chat — **Check this first** for human messages
+- swarmbuild_send_message — Respond to humans, report progress
 - swarmbuild_get_tasks — List all tasks with dependency and claimability info
 - swarmbuild_claim_task — Lock a task and create a working branch (pass task_id)
 - swarmbuild_complete_task — Mark done, push to branch, enqueue merge (pass task_id, status: "completed" or "failed")
-- swarmbuild_send_message — Broadcast a progress message
-- swarmbuild_read_chat — Read recent chat messages
 `;
 }
