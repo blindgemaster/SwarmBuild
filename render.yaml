@@ -1,0 +1,38 @@
+services:
+  - type: web
+    name: swarmbuild
+    runtime: docker
+    dockerfilePath: ./apps/api/Dockerfile
+    dockerContext: ./apps/api
+    plan: free
+    region: oregon
+    healthCheckPath: /api/health
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: HUGGING_FACE_TOKEN
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GITHUB_CLIENT_ID
+        sync: false
+      - key: GITHUB_CLIENT_SECRET
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: GITHUB_ORG
+        value: swarmbuild-jobs
+      - key: REDIS_URL
+        sync: false
+      - key: FRONTEND_URL
+        value: https://swarm-build-web.vercel.app
+      - key: API_URL
+        value: https://swarmbuild.onrender.com
+      - key: DEV_MODE
+        value: "false"
+      - key: JWT_SECRET
+        sync: false

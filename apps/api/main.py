@@ -62,7 +62,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS — explicit origin whitelist (never use * with credentials)
+# Middleware execution order is LIFO — last added runs first on request.
+# CORS must be added LAST so it runs FIRST, handling OPTIONS preflight
+# before audit/rate-limit can interfere.
 settings = get_settings()
 _cors_origins = [settings.frontend_url, settings.api_url]
 if settings.dev_mode:
@@ -70,19 +72,22 @@ if settings.dev_mode:
         "http://localhost:3000", "http://localhost:3001",
         "http://localhost:8000", "http://127.0.0.1:3000", "http://127.0.0.1:3001",
     ]
+
+# 1. Audit logging (runs third — innermost)
+app.add_middleware(AuditMiddleware)
+
+# 2. Rate limiting (runs second)
+app.add_middleware(RateLimitMiddleware)
+
+# 3. CORS (runs first — outermost, handles OPTIONS before anything else)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
+    allow_origin_regex=r"https://.*\.vercel\.app",  # All Vercel preview deployments
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Audit logging middleware
-app.add_middleware(AuditMiddleware)
-
-# Rate limiting middleware
-app.add_middleware(RateLimitMiddleware)
 
 # Mount routers
 app.include_router(auth.router, prefix="/api/auth", tags=["Auth"])
