@@ -171,14 +171,14 @@ async def _handle_task_send(req: A2ARequest, request: Request):
 
             # Create contributor record with a synthetic A2A user
             import secrets
-            from datetime import datetime, timedelta
+            from datetime import datetime, timedelta, timezone
             a2a_token = f"wt_{secrets.token_urlsafe(32)}"
 
             db.table("contributors").insert({
                 "job_id": job_id,
                 "user_id": "00000000-0000-0000-0000-000000000000",
                 "worker_token": a2a_token,
-                "token_expires": (datetime.utcnow() + timedelta(hours=24)).isoformat(),
+                "token_expires": (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat(),
                 "role": role,
                 "is_ready": True,
                 "contributor_status": "active",
@@ -229,10 +229,10 @@ async def _handle_task_send(req: A2ARequest, request: Request):
             if not task_id:
                 return to_a2a_error(-32602, "Could not extract task_id from message.", req.id)
 
-            from datetime import datetime
+            from datetime import datetime, timezone
             result = (
                 db.table("tasks")
-                .update({"status": "completed", "updated_at": datetime.utcnow().isoformat()})
+                .update({"status": "completed", "updated_at": datetime.now(timezone.utc).isoformat()})
                 .eq("id", task_id)
                 .eq("locked_by_token", worker_token)
                 .execute()
@@ -295,10 +295,10 @@ async def _handle_task_cancel(req: A2ARequest, request: Request):
         return to_a2a_error(-32602, "Missing task id or authentication", req.id)
 
     db = get_supabase()
-    from datetime import datetime
+    from datetime import datetime, timezone
     result = (
         db.table("tasks")
-        .update({"status": "available", "locked_by_token": None, "updated_at": datetime.utcnow().isoformat()})
+        .update({"status": "available", "locked_by_token": None, "updated_at": datetime.now(timezone.utc).isoformat()})
         .eq("id", task_id)
         .eq("locked_by_token", worker_token)
         .execute()

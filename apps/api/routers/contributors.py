@@ -6,7 +6,7 @@ generating the docker run command.
 """
 
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional
@@ -94,7 +94,7 @@ async def register_contributor(job_id: str, req: ContributeRequest, request: Req
         "role": req.role,
         "is_ready": True if is_hot_join else False,
         "contributor_status": "active" if is_hot_join else "registered",
-        "token_expires": (datetime.utcnow() + timedelta(hours=24)).isoformat(),
+        "token_expires": (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat(),
     }
     try:
         result = db.table("contributors").insert(contributor).execute()
@@ -106,7 +106,7 @@ async def register_contributor(job_id: str, req: ContributeRequest, request: Req
         db.table("jobs").update({
             "status": "approved",  # stays approved until everyone is ready
             "lobby_state": "gathering",
-            "updated_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", job_id).execute()
 
 
@@ -131,7 +131,7 @@ async def unregister_contributor(job_id: str, request: Request):
 
     result = (
         db.table("contributors")
-        .update({"left_at": datetime.utcnow().isoformat()})
+        .update({"left_at": datetime.now(timezone.utc).isoformat()})
         .eq("job_id", job_id)
         .eq("user_id", user_id)
         .is_("left_at", "null")
@@ -224,7 +224,7 @@ async def toggle_ready(job_id: str, req: ReadyRequest, request: Request):
         db.table("jobs").update({
             "status": "running",
             "lobby_state": "executing",
-            "updated_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", job_id).execute()
 
     await manager.broadcast(job_id, {"type": "lobby_state_change"})

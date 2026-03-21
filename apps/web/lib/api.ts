@@ -100,6 +100,15 @@ export interface Task {
     assigned_role?: string;
     status: "available" | "locked" | "completed" | "failed";
     locked_by_token?: string;
+    locked_by_role?: string | null;
+    locked_by_status?: string | null;
+    depends_on?: string[];
+    parallel_group?: string | null;
+    estimated_duration?: number | null;
+    // DAG enrichment fields (added by server)
+    is_claimable?: boolean;
+    blocking_tasks?: string[];
+    priority_score?: number;
     created_at: string;
     updated_at: string;
 }
@@ -237,6 +246,9 @@ export const api = {
     // Credits
     getCredits: () => apiFetch<{ balance: number }>("/api/credits"),
 
+    getCreditsHistory: (page = 1) =>
+        apiFetch<{ events: { id: string; type: string; amount: number; description: string; created_at: string }[]; total: number }>(`/api/credits/history?page=${page}`),
+
     updatePlan: (jobId: string, data: { agent_prompt?: string; task_list?: string[] }) =>
         apiFetch(`/api/jobs/${jobId}/plan`, {
             method: "PATCH",
@@ -262,6 +274,34 @@ export const api = {
             method: "POST",
             body: JSON.stringify({ content }),
         }),
+
+    // Job update
+    updateJob: (jobId: string, data: { title?: string; description?: string; output_type?: string; tech_stack?: string[]; constraints?: string; examples?: string }) =>
+        apiFetch<Job>(`/api/jobs/${jobId}`, { method: "PATCH", body: JSON.stringify(data) }),
+
+    // Costs & Audit
+    getJobCosts: (jobId: string) =>
+        apiFetch<Record<string, unknown>>(`/api/jobs/${jobId}/costs`),
+
+    getJobAudit: (jobId: string) =>
+        apiFetch<{ entries: Record<string, unknown>[] }>(`/api/jobs/${jobId}/audit`),
+
+    // Merge Queue
+    getMergeQueue: (jobId: string) =>
+        apiFetch<{ queue: Record<string, unknown>[] }>(`/api/${jobId}/merge/queue`),
+
+    // Verification
+    getPendingReview: (jobId: string) =>
+        apiFetch<{ tasks: Record<string, unknown>[] }>(`/api/jobs/${jobId}/tasks/pending-review`),
+
+    submitReview: (jobId: string, taskId: string, decision: "approve" | "reject", comments: string) =>
+        apiFetch(`/api/jobs/${jobId}/tasks/${taskId}/review`, {
+            method: "POST",
+            body: JSON.stringify({ decision, comments }),
+        }),
+
+    // Auth
+    getMe: () => apiFetch<{ user_id: string; credits: number }>("/api/auth/me"),
 
     // Logs
     getJobLogs: (jobId: string) =>

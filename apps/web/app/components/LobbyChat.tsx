@@ -96,6 +96,7 @@ export function LobbyChat({
     const [optimistic, setOptimistic] = useState<Message[]>([]);
     const [newText, setNewText] = useState("");
     const [sending, setSending] = useState(false);
+    const [sendError, setSendError] = useState<string | null>(null);  // v2.2: Show send errors to user
     const containerRef = useRef<HTMLDivElement>(null);
 
     // Merge server messages with optimistic ones (dedup by content+author)
@@ -110,20 +111,29 @@ export function LobbyChat({
         e.preventDefault();
         if (!newText.trim() || sending) return;
         setSending(true);
+        setSendError(null);
+
+        // v2.2: Truly optimistic — show message immediately, revert on failure
+        const tempId = crypto.randomUUID();
+        const msg: Message = {
+            id: tempId,
+            job_id: jobId,
+            author_name: "You",
+            author_type: "human",
+            content: newText.trim(),
+            created_at: new Date().toISOString(),
+        };
+        setOptimistic(prev => [...prev, msg]);
+        const savedText = newText.trim();
+        setNewText("");
+
         try {
-            await api.sendMessage(jobId, newText.trim());
-            const msg: Message = {
-                id: crypto.randomUUID(),
-                job_id: jobId,
-                author_name: "You",
-                author_type: "human",
-                content: newText.trim(),
-                created_at: new Date().toISOString(),
-            };
-            setOptimistic(prev => [...prev, msg]);
-            setNewText("");
-        } catch (err) {
-            console.error("Failed to send message", err);
+            await api.sendMessage(jobId, savedText);
+        } catch {
+            // Revert optimistic message on failure
+            setOptimistic(prev => prev.filter(m => m.id !== tempId));
+            setNewText(savedText);  // Restore the text so user can retry
+            setSendError("Failed to send message. Please try again.");
         }
         setSending(false);
     }
@@ -169,7 +179,7 @@ export function LobbyChat({
                     </span>
                 </div>
                 <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 10, background: "var(--surface-2)", color: "var(--text-muted)", fontWeight: 500 }}>
-                    AI chat coming soon
+                    Human + Agent
                 </span>
             </div>
 
@@ -206,6 +216,14 @@ export function LobbyChat({
                     ))
                 )}
             </div>
+
+            {/* Send error feedback */}
+            {sendError && (
+                <div style={{ padding: "6px 14px", background: "var(--red-dim, rgba(255,50,50,0.1))", color: "var(--red)", fontSize: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span>{sendError}</span>
+                    <button onClick={() => setSendError(null)} style={{ background: "none", border: "none", color: "var(--red)", cursor: "pointer", fontSize: 14 }}>✕</button>
+                </div>
+            )}
 
             {/* Input area */}
             <div

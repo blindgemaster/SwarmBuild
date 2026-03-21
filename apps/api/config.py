@@ -18,7 +18,7 @@ class Settings(BaseSettings):
 
     # AI model providers (harness-gen)
     hugging_face_token: str = ""
-    gemini_api_key: str = ""
+    groq_api_key: str = ""
 
     # GitHub OAuth
     github_client_id: str = ""
@@ -34,7 +34,8 @@ class Settings(BaseSettings):
     api_url: str = "https://swarmbuild.onrender.com"
 
     # Dev mode — bypasses auth, enables test data endpoints
-    dev_mode: bool = True
+    # MUST be explicitly set to true in .env for local development
+    dev_mode: bool = False
 
     model_config = {
         "env_file": os.path.join(os.path.dirname(__file__), ".env"),

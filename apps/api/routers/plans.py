@@ -4,7 +4,7 @@ Plans Router — Harness generation and plan management
 Triggers AI-powered test harness generation via the harness-gen module.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Request, BackgroundTasks
 from pydantic import BaseModel
 from typing import Optional
@@ -21,7 +21,7 @@ async def _generate_plan_background(job_id: str):
     """
     Background task that calls harness-gen to create
     AGENT_PROMPT.md + test harness + task list.
-    Uses Google Gemini API.
+    Uses Groq API for fast inference.
     """
     from config import get_settings
 
@@ -36,20 +36,7 @@ async def _generate_plan_background(job_id: str):
     job = job_result.data[0]
 
     try:
-        # Import harness-gen from lib
         from lib.harness_gen.generator import generate_harness, JobSpec
-        from lib.harness_gen.safety import safety_check
-
-        # Run content safety check before generating plan
-        safety = await safety_check(job["title"], job["description"], settings.hugging_face_token)
-        if not safety.get("safe", True):
-            print(f"[api] Safety check REJECTED job {job_id}: {safety.get('reason', 'Unknown')}")
-            db.table("jobs").update({
-                "status": "failed",
-                "error_message": f"Content safety check failed: {safety.get('reason', 'Unknown')}",
-                "updated_at": datetime.utcnow().isoformat(),
-            }).eq("id", job_id).execute()
-            return
 
         # Fetch community discussion to inform the plan
         comments_result = (
@@ -78,7 +65,7 @@ async def _generate_plan_background(job_id: str):
             discussion=discussion,
         )
 
-        plan = await generate_harness(spec, settings.hugging_face_token)
+        plan = await generate_harness(spec, settings.hugging_face_token, settings.groq_api_key)
 
         # Enforce: "lead" must always be present as the first role
         roles = list(plan.required_roles or [])
@@ -93,7 +80,7 @@ async def _generate_plan_background(job_id: str):
             "test_harness": plan.test_files,
             "task_list": plan.task_list,
             "status": "plan_ready",
-            "updated_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", job_id).execute()
 
         print(f"[api] Plan generated for job {job_id} (quality: {plan.quality_score}/10)")
@@ -103,7 +90,7 @@ async def _generate_plan_background(job_id: str):
         db.table("jobs").update({
             "status": "failed",
             "error_message": f"Plan generation failed: {str(e)}",
-            "updated_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", job_id).execute()
 
 
@@ -136,7 +123,7 @@ async def generate_plan(
     db.table("jobs").update({
         "status": "pending",
         "error_message": None,
-        "updated_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }).eq("id", job_id).execute()
 
     # Run in background
@@ -205,7 +192,7 @@ async def edit_plan(job_id: str, request: Request):
             update_data[field] = body[field]
 
     if update_data:
-        update_data["updated_at"] = datetime.utcnow().isoformat()
+        update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
         db.table("jobs").update(update_data).eq("id", job_id).execute()
 
     return {"message": "Plan updated"}

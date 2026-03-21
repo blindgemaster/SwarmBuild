@@ -70,7 +70,7 @@ def validate_task_dependencies(new_tasks: list, existing_tasks: list) -> dict:
         cycle_descriptions = []
         for cycle in cycles:
             task_names = [task_map.get(tid, tid[:8] if tid else "?") for tid in cycle]
-            cycle_descriptions.append(" → ".join(task_names))
+            cycle_descriptions.append(" -> ".join(task_names))
 
         return {
             "valid": False,

@@ -14,6 +14,7 @@ const exec = util.promisify(execCb);
 
 // ── v2: Global tracking state ──
 let heartbeatInterval = null;
+let heartbeatInFlight = null;  // v2.2: Track in-flight heartbeat to avoid shutdown race
 let totalTokensUsed = 0;
 let sessionCount = 0;
 let commitCount = 0;
@@ -22,6 +23,8 @@ let WORKSPACE = null;
 
 function startHeartbeat(api) {
     heartbeatInterval = setInterval(async () => {
+        // v2.2: Track in-flight promise so shutdown can wait for it
+        const heartbeatPromise = (async () => {
         try {
             const response = await api.heartbeat({
                 agents_running: 1,
@@ -64,21 +67,30 @@ function startHeartbeat(api) {
             // Network error — log but don't crash
             console.log(`[swarmbuild] ⚠️ Heartbeat failed: ${err.message}`);
         }
+        })();
+        heartbeatInFlight = heartbeatPromise;
+        await heartbeatPromise;
+        heartbeatInFlight = null;
     }, 30_000); // Every 30 seconds
 }
 
-function stopHeartbeat() {
+async function stopHeartbeat() {
     if (heartbeatInterval) {
         clearInterval(heartbeatInterval);
         heartbeatInterval = null;
+    }
+    // v2.2: Wait for any in-flight heartbeat to finish before proceeding
+    if (heartbeatInFlight) {
+        try { await heartbeatInFlight; } catch { /* ignore */ }
+        heartbeatInFlight = null;
     }
 }
 
 async function gracefulShutdown(api, reason = "user_interrupted") {
     console.log(`\n[swarmbuild] 🛑 Initiating graceful shutdown (reason: ${reason})...`);
 
-    // 1. Stop the heartbeat
-    stopHeartbeat();
+    // 1. Stop the heartbeat (awaits any in-flight heartbeat)
+    await stopHeartbeat();
 
     // 2. Release all tasks locked by this worker
     try {
@@ -158,8 +170,7 @@ export async function runLobby(jobId, options) {
 
     // 1. Register and get worker token
     const contrib = await api.register(jobId, role);
-    console.log(`[DEBUG] api.register finished! Worker token is: ${api.workerToken}`);
-    console.log(`[swarmbuild] ✅ Joined! Worker Token: wt_...${api.workerToken?.slice(-6) || 'null'} `);
+    console.log(`[swarmbuild] ✅ Joined! Worker Token: wt_...${api.workerToken?.slice(-6) || 'null'}`);
 
     // 2. Fetch Job Info
     const jobInfo = await api.getJobInfo();
@@ -256,15 +267,21 @@ export async function runLobby(jobId, options) {
     }
 
     // Clean shutdown after all tasks done
-    stopHeartbeat();
+    await stopHeartbeat();
     try {
         await api.workerComplete("complete", "All tasks completed");
     } catch { /* ignore */ }
 }
 
-// ── v2.1: Coordinator loop — lead monitors, reviews, helps instead of idling ──
+// ── v2.4: Coordinator loop — fixed orphan detection + longer cooldown ──
 async function runCoordinatorLoop(api, role, jobInfo, WORKSPACE, runtimeName, jobId) {
     let lastCompletedCount = 0;
+    let lastSessionTime = 0;
+    let lastWorkerSessionTime = 0;
+    const SESSION_COOLDOWN_MS = 120_000; // v2.4: 2 minutes minimum between coordinator sessions
+    const WORKER_COOLDOWN_MS = 30_000;   // v2.5.1: 30s cooldown for hybrid worker task claiming
+    const NO_TASKS_TIMEOUT_MS = 5 * 60 * 1000;
+    let noTasksSince = null;
 
     while (true) {
         let tasks = [];
@@ -276,26 +293,32 @@ async function runCoordinatorLoop(api, role, jobInfo, WORKSPACE, runtimeName, jo
             continue;
         }
 
-        const pending = tasks.filter(t => t.status === 'available' || t.status === 'locked');
+        const pending = tasks.filter(t => t.status === 'available' || t.status === 'locked' || t.status === 'review');
         const completed = tasks.filter(t => t.status === 'completed');
 
         // All tasks done
         if (pending.length === 0 && tasks.length > 0) {
             console.log(`\n[swarmbuild] 🎉 All tasks complete! Coordinator signing off.`);
-            // One final coordinator session to send summary
             sessionCount++;
+            lastSessionTime = Date.now();
             await startAgentInteractive(api, role, jobInfo, false, WORKSPACE, runtimeName);
             break;
         }
 
-        // No tasks yet — wait
+        // No tasks yet — wait with timeout
         if (tasks.length === 0) {
+            if (!noTasksSince) noTasksSince = Date.now();
+            if (Date.now() - noTasksSince > NO_TASKS_TIMEOUT_MS) {
+                console.log(`[swarmbuild] ⚠️ No tasks created after 5 minutes. Exiting.`);
+                break;
+            }
             console.log(`[swarmbuild] ⏳ No tasks created yet. Waiting...`);
             await new Promise(r => setTimeout(r, 5000));
             continue;
         }
+        noTasksSince = null;
 
-        // Check if something changed since last cycle (new completions, etc.)
+        // Check if something changed since last cycle
         const hasNewCompletions = completed.length > lastCompletedCount;
         lastCompletedCount = completed.length;
 
@@ -305,34 +328,77 @@ async function runCoordinatorLoop(api, role, jobInfo, WORKSPACE, runtimeName, jo
             const msgs = await api.getMessages();
             const recent = msgs.filter(m =>
                 m.author_type === 'human' &&
-                Date.now() - new Date(m.created_at).getTime() < 60_000
+                Date.now() - new Date(m.created_at).getTime() < 120_000
             );
             hasHumanMessages = recent.length > 0;
         } catch { /* ignore */ }
 
-        // Orphaned tasks: available for >2 minutes with no one claiming them
-        const orphaned = tasks.filter(t =>
-            t.status === 'available' && t.is_claimable !== false
-        );
+        // v2.4: Only consider tasks truly orphaned if no active agent exists for their role
+        let orphanedCount = 0;
+        try {
+            const contribs = await api.client.get(`/api/jobs/${jobId}/contributors`);
+            const activeRoles = new Set(
+                (contribs.data.contributors || [])
+                    .filter(c => c.contributor_status === 'active' && !c.left_at)
+                    .map(c => c.role)
+            );
+            orphanedCount = tasks.filter(t => {
+                if (t.status !== 'available' || t.is_claimable === false) return false;
+                const assignedRole = t.assigned_role;
+                // Only orphaned if no active agent exists for this task's role
+                return assignedRole && !activeRoles.has(assignedRole);
+            }).length;
+        } catch { /* ignore — don't treat as orphaned if check fails */ }
 
-        // Spawn coordinator session if there's work to do
-        if (hasNewCompletions || hasHumanMessages || orphaned.length > 0) {
-            console.log(`[swarmbuild] 📋 Coordinator cycle: ${completed.length} done, ${pending.length} pending` +
-                (hasHumanMessages ? ', new human messages' : '') +
-                (orphaned.length > 0 ? `, ${orphaned.length} orphaned tasks` : ''));
-            sessionCount++;
-            await startAgentInteractive(api, role, jobInfo, false, WORKSPACE, runtimeName);
+        // Spawn coordinator session if there's a reason AND cooldown has elapsed
+        if (hasNewCompletions || hasHumanMessages || orphanedCount > 0) {
+            if (Date.now() - lastSessionTime < SESSION_COOLDOWN_MS) {
+                // Only log cooldown if there are human messages (important to respond)
+                if (hasHumanMessages) {
+                    console.log(`[swarmbuild] 📋 Coordinator: session cooldown active, will respond soon...`);
+                }
+            } else {
+                console.log(`[swarmbuild] 📋 Coordinator cycle: ${completed.length} done, ${pending.length} pending` +
+                    (hasHumanMessages ? ', new human messages' : '') +
+                    (orphanedCount > 0 ? `, ${orphanedCount} orphaned tasks` : ''));
+                sessionCount++;
+                lastSessionTime = Date.now();
+                await startAgentInteractive(api, role, jobInfo, false, WORKSPACE, runtimeName);
+            }
         } else {
-            console.log(`[swarmbuild] 📋 Coordinator: ${completed.length}/${tasks.length} tasks done. Monitoring...`);
+            // Quiet monitoring — log less frequently
+            if (Date.now() - lastSessionTime > 120_000) {
+                console.log(`[swarmbuild] 📋 Coordinator: ${completed.length}/${tasks.length} done. Monitoring...`);
+            }
         }
 
-        // Coordinator checks every 30 seconds (not 10s idle spam)
+        // v2.5: Check if lead has its own tasks to pick up (hybrid coordinator+worker)
+        const leadClaimable = tasks.filter(t =>
+            t.status === 'available' &&
+            t.is_claimable !== false &&
+            t.assigned_role === 'lead'
+        );
+
+        if (leadClaimable.length > 0 && Date.now() - lastWorkerSessionTime >= WORKER_COOLDOWN_MS) {
+            console.log(`[swarmbuild] 🔧 Coordinator picking up ${leadClaimable.length} lead task(s)...`);
+            sessionCount++;
+            lastWorkerSessionTime = Date.now();
+            // Spawn as worker (forceWorkerMode=true) to actually claim and execute the work
+            await startAgentInteractive(api, role, jobInfo, false, WORKSPACE, runtimeName, true);
+        }
+
+        // Coordinator checks every 30 seconds
         await new Promise(r => setTimeout(r, 30_000));
     }
 }
 
-// ── Worker loop — claim, implement, complete ──
+// ── v2.4: Worker loop — fixed idle timeout + smart spawning ──
 async function runWorkerLoop(api, role, jobInfo, WORKSPACE, runtimeName, isSoloLead) {
+    const WORKER_IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+    let idleSince = null;
+    let consecutiveEmptySessions = 0;
+    const MAX_EMPTY_SESSIONS = 3; // Back off after 3 sessions with no progress
+
     while (true) {
         let tasks = [];
         try {
@@ -343,28 +409,103 @@ async function runWorkerLoop(api, role, jobInfo, WORKSPACE, runtimeName, isSoloL
             continue;
         }
 
-        const pendingTasks = tasks.filter(t => t.status === 'available' || t.status === 'locked');
-        if (pendingTasks.length === 0) {
-            if (tasks.length === 0) {
-                console.log(`[swarmbuild] ⏳ No tasks created yet. Waiting for lead agent to create tasks...`);
-                await new Promise(r => setTimeout(r, 5000));
-                continue;
+        // No tasks created yet — wait for lead
+        if (tasks.length === 0) {
+            if (!idleSince) idleSince = Date.now();
+            if (Date.now() - idleSince > WORKER_IDLE_TIMEOUT_MS) {
+                console.log(`[swarmbuild] ⏰ Idle timeout. No tasks created. Exiting.`);
+                break;
             }
-            console.log(`\n[swarmbuild] 🎉 All tasks for the job are complete! Exiting gracefully...`);
-            break;
-        }
-
-        const myRoleTasks = isSoloLead
-            ? pendingTasks
-            : pendingTasks.filter(t => t.assigned_role === role);
-        if (myRoleTasks.length === 0) {
-            console.log(`[swarmbuild] ⏳ No pending tasks for role '${role}'. Sleeping 10s...`);
-            await new Promise(r => setTimeout(r, 10000));
+            console.log(`[swarmbuild] ⏳ No tasks created yet. Waiting for lead agent...`);
+            await new Promise(r => setTimeout(r, 5000));
             continue;
         }
 
+        // Check if all tasks are terminal (completed/cancelled/failed)
+        const activeStatuses = ['available', 'locked', 'review'];
+        const activeTasks = tasks.filter(t => activeStatuses.includes(t.status));
+        if (activeTasks.length === 0) {
+            if (!idleSince) {
+                idleSince = Date.now();
+                console.log(`[swarmbuild] ⏳ All tasks complete. Waiting up to 5 min for new tasks...`);
+            }
+            if (Date.now() - idleSince > WORKER_IDLE_TIMEOUT_MS) {
+                console.log(`[swarmbuild] ⏰ Idle timeout (5 min). No new tasks. Exiting.`);
+                break;
+            }
+            await new Promise(r => setTimeout(r, 10_000));
+            continue;
+        }
+
+        // Filter to tasks relevant to this agent's role
+        // v2.5.1: First try own role, then fall back to ANY available task
+        const myRoleTasks = isSoloLead
+            ? activeTasks
+            : activeTasks.filter(t => t.assigned_role === role);
+
+        const claimableForMyRole = myRoleTasks.filter(t =>
+            t.status === 'available' && t.is_claimable !== false
+        );
+
+        // If no tasks for my role, check for ANY claimable task (cross-role helping)
+        const allClaimable = activeTasks.filter(t =>
+            t.status === 'available' && t.is_claimable !== false
+        );
+        const claimableForMe = claimableForMyRole.length > 0 ? claimableForMyRole : allClaimable;
+        const isCrossRoleHelping = claimableForMyRole.length === 0 && allClaimable.length > 0;
+
+        if (claimableForMe.length === 0) {
+            // Nothing this agent can claim right now
+            if (!idleSince) {
+                idleSince = Date.now();
+                const reason = myRoleTasks.length === 0
+                    ? `No tasks assigned to role '${role}'.`
+                    : `All ${myRoleTasks.length} task(s) for '${role}' are locked/blocked.`;
+                console.log(`[swarmbuild] ⏳ ${reason} Waiting up to 5 min...`);
+            }
+            if (Date.now() - idleSince > WORKER_IDLE_TIMEOUT_MS) {
+                console.log(`[swarmbuild] ⏰ Idle timeout (5 min). Exiting.`);
+                break;
+            }
+            await new Promise(r => setTimeout(r, 10_000));
+            continue;
+        }
+
+        // Claimable tasks found — reset idle timer
+        idleSince = null;
+
+        if (isCrossRoleHelping) {
+            console.log(`[swarmbuild] 🤝 No '${role}' tasks available. Helping with ${claimableForMe.length} task(s) from other roles...`);
+        }
+
         sessionCount++;
+        const claimableCount = claimableForMe.length;
         const exitCode = await startAgentInteractive(api, role, jobInfo, false, WORKSPACE, runtimeName);
+
+        // v2.4: Check if session actually accomplished anything
+        try {
+            const postTasks = await api.getTasks();
+            const stillMyRole = postTasks.filter(t =>
+                t.status === 'available' &&
+                t.is_claimable !== false &&
+                (isSoloLead || t.assigned_role === role)
+            );
+            // v2.5.1: Count all claimable (including cross-role)
+            const stillClaimable = stillMyRole.length > 0 ? stillMyRole : postTasks.filter(t =>
+                t.status === 'available' && t.is_claimable !== false
+            );
+            if (stillClaimable.length >= claimableCount) {
+                // Session didn't claim anything — increment empty counter
+                consecutiveEmptySessions++;
+                if (consecutiveEmptySessions >= MAX_EMPTY_SESSIONS) {
+                    console.log(`[swarmbuild] ⚠️ ${MAX_EMPTY_SESSIONS} sessions with no progress. Backing off 60s...`);
+                    await new Promise(r => setTimeout(r, 60_000));
+                    consecutiveEmptySessions = 0;
+                }
+            } else {
+                consecutiveEmptySessions = 0;
+            }
+        } catch { /* ignore check failure */ }
 
         if (exitCode !== 0) {
             console.log(`[swarmbuild] Agent exited with code ${exitCode}. Pausing 5s...`);
@@ -495,7 +636,7 @@ async function setupWorkspace(jobInfo, WORKSPACE) {
     }
 }
 
-async function startAgentInteractive(api, role, jobInfo, isPlanning = false, WORKSPACE, runtimeName = "claude") {
+async function startAgentInteractive(api, role, jobInfo, isPlanning = false, WORKSPACE, runtimeName = "claude", forceWorkerMode = false) {
     const runtime = getRuntime(runtimeName);
     console.log(`[swarmbuild] Using runtime: ${runtime.name}`);
 
@@ -522,11 +663,13 @@ async function startAgentInteractive(api, role, jobInfo, isPlanning = false, WOR
         await fs.writeFile(mcpConfigPath, JSON.stringify(mcpConfig, null, 2));
     }
 
-    const isSoloLead = role === 'lead' && (
+    // When forceWorkerMode is true, treat as solo lead so we get the execution prompt
+    // instead of the coordinator prompt — this lets the coordinator pick up its own tasks
+    const isSoloLead = forceWorkerMode || (role === 'lead' && (
         !jobInfo.required_roles?.length ||
         jobInfo.required_roles.length === 1 ||
         jobInfo.required_roles.every(r => r === 'lead')
-    );
+    ));
 
     // v2: Use prompt translation layer for runtime-specific prompts
     const systemPrompt = buildPrompt(runtime, {

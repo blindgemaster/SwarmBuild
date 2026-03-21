@@ -78,7 +78,7 @@ async def worker_heartbeat(token: str, req: HeartbeatRequest):
     contributor = _verify_token(token)
     db = get_supabase()
 
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
 
     # Update contributor record with v2 fields
     db.table("contributors").update({
@@ -174,7 +174,7 @@ async def worker_progress(token: str, req: ProgressRequest):
         "tokens_used": req.tokens_used,
         "sessions_run": req.sessions_run,
         "commits_pushed": req.commits_pushed,
-        "last_seen": datetime.utcnow().isoformat(),
+        "last_seen": datetime.now(timezone.utc).isoformat(),
     }).eq("id", contributor["id"]).execute()
 
     return {"status": "ok"}
@@ -193,7 +193,7 @@ async def worker_complete(token: str, req: CompleteRequest):
 
     # Mark contributor as left
     db.table("contributors").update({
-        "left_at": datetime.utcnow().isoformat(),
+        "left_at": datetime.now(timezone.utc).isoformat(),
     }).eq("id", contributor["id"]).execute()
 
     # Agents finishing their work: award credits but do NOT mark the job complete.
@@ -228,7 +228,7 @@ async def worker_complete(token: str, req: CompleteRequest):
         db.table("jobs").update({
             "status": "failed",
             "error_message": req.message,
-            "updated_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", contributor["job_id"]).execute()
 
     return {"status": "ok", "message": f"Worker {req.status}"}

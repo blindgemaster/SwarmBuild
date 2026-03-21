@@ -9,7 +9,8 @@ Reference: The Engineering Part 2/01-AUTO-MERGE-PIPELINE.md
 """
 
 import asyncio
-from datetime import datetime, timezone
+import json
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
@@ -20,6 +21,8 @@ from lib.websocket import manager
 
 MERGE_POLL_INTERVAL = 15  # seconds
 STARTUP_DELAY = 30  # Grace period before first merge cycle
+MAX_CONFLICT_RETRIES = 3  # Max times to re-enqueue a conflicted merge
+RETRY_DELAY_SECONDS = 60  # Wait before retrying a conflicted merge
 
 
 async def github_api_merge(repo_full_name: str, branch_name: str) -> dict:
@@ -62,6 +65,36 @@ async def process_next_merge():
     """Process the next pending item in the merge queue."""
     db = get_supabase()
 
+    # Recover stale items stuck in "processing" for >5 minutes (crash recovery)
+    stale_cutoff = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    db.table("merge_queue").update({
+        "status": "pending",
+        "started_at": None,
+    }).eq("status", "processing").lt("started_at", stale_cutoff).execute()
+
+    # Retry conflicted merges: re-enqueue items marked "retry_pending" after enough time
+    retry_cutoff = (datetime.now(timezone.utc) - timedelta(seconds=RETRY_DELAY_SECONDS)).isoformat()
+    retry_items = (
+        db.table("merge_queue")
+        .select("id, position")
+        .eq("status", "retry_pending")
+        .lt("completed_at", retry_cutoff)
+        .execute()
+    )
+    if retry_items.data:
+        # Get max position to re-enqueue at the end
+        max_pos = db.table("merge_queue").select("position").order("position", desc=True).limit(1).execute()
+        next_pos = (max_pos.data[0]["position"] + 1) if max_pos.data else 1
+        for ri in retry_items.data:
+            db.table("merge_queue").update({
+                "status": "pending",
+                "started_at": None,
+                "completed_at": None,
+                "position": next_pos,
+            }).eq("id", ri["id"]).execute()
+            next_pos += 1
+        print(f"[merge] Re-enqueued {len(retry_items.data)} retry_pending items")
+
     # Get next pending merge (FIFO order)
     pending = (
         db.table("merge_queue")
@@ -98,13 +131,20 @@ async def process_next_merge():
 
     repo_id = job.data[0]["github_repo_id"]
 
-    # Mark as processing
-    db.table("merge_queue").update({
-        "status": "processing",
-        "started_at": datetime.now(timezone.utc).isoformat(),
-    }).eq("id", queue_id).execute()
+    # Atomic claim: only transition pending → processing (prevents double-processing)
+    claim_result = (
+        db.table("merge_queue").update({
+            "status": "processing",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        })
+        .eq("id", queue_id)
+        .eq("status", "pending")
+        .execute()
+    )
+    if not claim_result.data:
+        return  # Another process already claimed this item
 
-    print(f"[merge] Processing: {branch} → main on {repo_id} (queue #{item['position']})")
+    print(f"[merge] Processing: {branch} -> main on {repo_id} (queue #{item['position']})")
 
     # Attempt merge via GitHub API
     result = await github_api_merge(repo_id, branch)
@@ -126,22 +166,66 @@ async def process_next_merge():
             "queue_id": queue_id,
             "tier": tier,
         })
-        print(f"[merge] ✅ Merged {branch} (tier {tier})")
+        print(f"[merge] Merged {branch} (tier {tier})")
     else:
-        db.table("merge_queue").update({
-            "status": "conflict",
-            "conflict_tier": 3,
-            "conflict_diff": result.get("message", "Unknown error"),
-            "completed_at": now,
-        }).eq("id", queue_id).execute()
+        # Parse retry count from conflict_diff field (JSON: {"retry_count": N, "message": "..."})
+        existing = (
+            db.table("merge_queue")
+            .select("conflict_diff")
+            .eq("id", queue_id)
+            .execute()
+        )
+        prev_diff = (existing.data[0].get("conflict_diff") or "") if existing.data else ""
+        retry_count = 0
+        if prev_diff:
+            try:
+                parsed = json.loads(prev_diff)
+                retry_count = parsed.get("retry_count", 0)
+            except (json.JSONDecodeError, AttributeError):
+                # Backwards compat: try old "retry:N|message" format
+                if prev_diff.startswith("retry:"):
+                    try:
+                        retry_count = int(prev_diff.split("|")[0].split(":")[1])
+                    except (ValueError, IndexError):
+                        retry_count = 0
 
-        await manager.broadcast(job_id, {
-            "type": "merge_conflict",
-            "branch": branch,
-            "queue_id": queue_id,
-            "message": result.get("message"),
-        })
-        print(f"[merge] ⚠️ Conflict on {branch}: {result.get('message')}")
+        error_msg = result.get("message", "Unknown error")
+        retry_count += 1
+
+        if retry_count < MAX_CONFLICT_RETRIES:
+            # Re-enqueue for retry — set to retry_pending so the recovery step picks it up
+            db.table("merge_queue").update({
+                "status": "retry_pending",
+                "conflict_tier": 2,
+                "conflict_diff": json.dumps({"retry_count": retry_count, "message": error_msg}),
+                "completed_at": now,
+            }).eq("id", queue_id).execute()
+
+            await manager.broadcast(job_id, {
+                "type": "merge_retry",
+                "branch": branch,
+                "queue_id": queue_id,
+                "retry_count": retry_count,
+                "max_retries": MAX_CONFLICT_RETRIES,
+                "message": error_msg,
+            })
+            print(f"[merge] Conflict on {branch} (attempt {retry_count}/{MAX_CONFLICT_RETRIES}), will retry: {error_msg}")
+        else:
+            # Exhausted retries — mark as terminal conflict (Tier 3)
+            db.table("merge_queue").update({
+                "status": "conflict",
+                "conflict_tier": 3,
+                "conflict_diff": json.dumps({"retry_count": retry_count, "message": error_msg}),
+                "completed_at": now,
+            }).eq("id", queue_id).execute()
+
+            await manager.broadcast(job_id, {
+                "type": "merge_conflict",
+                "branch": branch,
+                "queue_id": queue_id,
+                "message": f"Terminal conflict after {retry_count} attempts: {error_msg}",
+            })
+            print(f"[merge] Terminal conflict on {branch} after {retry_count} retries: {error_msg}")
 
 
 async def merge_processor_loop():

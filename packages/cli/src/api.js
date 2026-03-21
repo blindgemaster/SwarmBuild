@@ -3,7 +3,7 @@ import axios from "axios";
 export class SwarmbuildAPI {
     constructor(relayUrl, devToken = null) {
         this.relayUrl = relayUrl;
-        this.client = axios.create({ baseURL: relayUrl });
+        this.client = axios.create({ baseURL: relayUrl, timeout: 30_000 });
         this.devToken = devToken;
         this.workerToken = null;
     }
@@ -21,9 +21,18 @@ export class SwarmbuildAPI {
                 }
             } catch (err) {
                 attempt++;
-                const isNetworkError = !err.response && (err.code === 'ECONNRESET' || err.code === 'ENOTFOUND' || err.code === 'ECONNREFUSED');
-                if (isNetworkError && attempt < maxRetries) {
-                    console.log(`[swarmbuild] ⚠️ Network error (${err.code}). Retrying in ${attempt}s...`);
+                const isNetworkError = !err.response && (
+                    err.code === 'ECONNRESET' || err.code === 'ENOTFOUND' ||
+                    err.code === 'ECONNREFUSED' || err.code === 'ECONNABORTED' ||
+                    err.code === 'ETIMEDOUT'
+                );
+                const isRetryableStatus = err.response && (
+                    err.response.status === 503 || err.response.status === 429 ||
+                    err.response.status === 502 || err.response.status === 504
+                );
+                if ((isNetworkError || isRetryableStatus) && attempt < maxRetries) {
+                    const reason = isNetworkError ? err.code : `HTTP ${err.response.status}`;
+                    console.log(`[swarmbuild] ⚠️ ${reason}. Retrying in ${attempt}s...`);
                     await new Promise(r => setTimeout(r, attempt * 1000));
                 } else {
                     throw err;
@@ -36,7 +45,6 @@ export class SwarmbuildAPI {
 
     async register(jobId, role) {
         this.jobId = jobId;
-        console.log(`[DEBUG] POSTing to /api/jobs/${jobId}/contribute with role ${role}`);
         const res = await this._fetchWithRetry('post',
             `/api/jobs/${jobId}/contribute`,
             { role },
@@ -135,5 +143,12 @@ export class SwarmbuildAPI {
     async getTaskAttempts(taskId) {
         const res = await this._fetchWithRetry('get', `/api/${this.workerToken}/tasks/${taskId}/attempts`);
         return res.data.attempts;
+    }
+
+    // --- v2.3: Task Cancellation ---
+
+    async cancelTask(taskId, reason = "") {
+        const res = await this._fetchWithRetry('post', `/api/${this.workerToken}/tasks/${taskId}/cancel`, { reason });
+        return res.data;
     }
 }

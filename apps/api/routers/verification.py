@@ -9,7 +9,7 @@ Tier 3: Human gate (job poster approves)
 Reference: The Engineering/06-VERIFICATION.md
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional
@@ -94,7 +94,7 @@ async def human_review(job_id: str, task_id: str, req: ReviewRequest):
         "tier": tier,
         "decision": req.decision,
         "comments": req.comments,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     updated_log = existing_log + [new_log_entry]
 
@@ -111,7 +111,7 @@ async def human_review(job_id: str, task_id: str, req: ReviewRequest):
         "verification_status": final_vs,
         "status": task_status,
         "locked_by_token": None if task_status == "available" else task.get("locked_by_token"),
-        "updated_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
         "verification_log": updated_log,
     }).eq("id", task_id).execute()
 

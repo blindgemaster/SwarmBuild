@@ -62,11 +62,17 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS — allow all origins in dev (test console opens from file:// or localhost)
+# CORS — explicit origin whitelist (never use * with credentials)
 settings = get_settings()
+_cors_origins = [settings.frontend_url, settings.api_url]
+if settings.dev_mode:
+    _cors_origins += [
+        "http://localhost:3000", "http://localhost:3001",
+        "http://localhost:8000", "http://127.0.0.1:3000", "http://127.0.0.1:3001",
+    ]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -107,12 +113,13 @@ async def health_check():
     return {"status": "ok", "service": "swarmbuild-api"}
 
 
-# Serve test console from apps/web/
+# Serve test console from apps/web/ (only if built index.html exists)
 WEB_DIR = os.path.join(os.path.dirname(__file__), "..", "web")
-if os.path.isdir(WEB_DIR):
+WEB_INDEX = os.path.join(WEB_DIR, "index.html")
+if os.path.isdir(WEB_DIR) and os.path.isfile(WEB_INDEX):
     @app.get("/")
     async def serve_console():
-        return FileResponse(os.path.join(WEB_DIR, "index.html"))
+        return FileResponse(WEB_INDEX)
 
     app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 

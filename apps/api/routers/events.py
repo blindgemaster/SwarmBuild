@@ -1,5 +1,9 @@
 """
-SSE Events Router — Server-Sent Events fallback for real-time job updates.
+SSE Events Router — Server-Sent Events for real-time job updates.
+
+Provides two SSE endpoints:
+1. /jobs/{job_id}/events — per-job polling-based SSE (original, fallback)
+2. /events/stream — global event bus SSE (push-based, preferred)
 
 Some environments (corporate proxies, load balancers) block WebSocket upgrades.
 SSE works over standard HTTP and provides a reliable fallback for one-way
@@ -17,16 +21,55 @@ from fastapi.responses import StreamingResponse
 
 from database import get_supabase
 from lib.websocket import manager
+from lib.sse import event_bus
 
 router = APIRouter()
 
 SSE_HEARTBEAT_INTERVAL = 15  # seconds
 
 
+@router.get("/events/stream")
+async def event_stream(request: Request):
+    """
+    SSE endpoint for real-time updates via the event bus (push-based).
+
+    Clients connect via EventSource:
+        const es = new EventSource('/api/events/stream');
+        es.addEventListener('task.updated', (e) => console.log(JSON.parse(e.data)));
+    """
+    queue = event_bus.subscribe()
+
+    async def generate():
+        try:
+            # Send keepalive comment
+            yield ": keepalive\n\n"
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    yield f"event: {event['type']}\ndata: {json.dumps(event['data'])}\n\n"
+                except asyncio.TimeoutError:
+                    # Send keepalive every 30s
+                    yield ": keepalive\n\n"
+                    if await request.is_disconnected():
+                        break
+        finally:
+            event_bus.unsubscribe(queue)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        }
+    )
+
+
 @router.get("/jobs/{job_id}/events")
 async def sse_events(job_id: str, request: Request):
     """
-    SSE endpoint for real-time job events (fallback for WebSocket).
+    SSE endpoint for real-time job events (polling-based fallback).
 
     Clients connect via EventSource:
         const es = new EventSource('/api/jobs/{job_id}/events');

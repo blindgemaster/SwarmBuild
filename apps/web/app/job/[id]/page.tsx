@@ -63,6 +63,7 @@ export default function JobDetailPage() {
     const [newTaskItem, setNewTaskItem] = useState("");
     const [savingPlan, setSavingPlan] = useState(false);
     const planInitializedRef = useRef(false);
+    const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);  // v2.2: Stop polling on terminal state
     const [isMounted, setIsMounted] = useState(false);
 
     const loadJob = useCallback(async () => {
@@ -81,6 +82,11 @@ export default function JobDetailPage() {
             setContributors(contributorsData.contributors || []);
             setTasks(tasksData.tasks || []);
             setMessages(messagesData.messages || []);
+            // v2.2: Stop polling once job reaches a terminal state
+            if (["complete", "cancelled"].includes(jobData.status) && pollIntervalRef.current) {
+                clearInterval(pollIntervalRef.current);
+                pollIntervalRef.current = null;
+            }
             if (!planInitializedRef.current && (planData?.plan_ready || jobData.status === "plan_ready")) {
                 if (planData?.plan_ready) {
                     setEditingPrompt(planData.agent_prompt || "");
@@ -116,18 +122,26 @@ export default function JobDetailPage() {
         }).catch(() => { });
 
         // Polling fallback — refresh data every 8 seconds for reliable realtime
-        const pollInterval = setInterval(() => { loadJob(); }, 8000);
+        // v2.2: Poll ref so we can stop it when job reaches a terminal state
+        pollIntervalRef.current = setInterval(() => { loadJob(); }, 8000);
 
-        // WebSocket for instant updates (best-effort, with reconnection)
+        // WebSocket for instant updates (best-effort, with exponential backoff reconnection)
         const apiUrl = process.env.NEXT_PUBLIC_API_URL || "https://swarmbuild.onrender.com";
         const wsUrl = apiUrl.replace(/^http/, "ws");
         let ws: WebSocket | null = null;
         let logWs: WebSocket | null = null;
         let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+        let logReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+        let lobbyBackoff = 1000;  // v2.2: Start at 1s, doubles up to 30s
+        let logBackoff = 1000;
+        let lobbyRetries = 0;   // v2.3: Cap retries to avoid console spam
+        let logRetries = 0;
+        const MAX_WS_RETRIES = 5;
 
         function connectLobbyWs() {
             try {
                 ws = new WebSocket(`${wsUrl}/api/jobs/${jobId}/lobby/ws`);
+                ws.onopen = () => { lobbyBackoff = 1000; lobbyRetries = 0; };  // Reset on successful connect
                 ws.onmessage = (event) => {
                     try {
                         const data = JSON.parse(event.data);
@@ -137,7 +151,11 @@ export default function JobDetailPage() {
                     } catch { }
                 };
                 ws.onclose = () => {
-                    reconnectTimer = setTimeout(connectLobbyWs, 5000);
+                    lobbyRetries++;
+                    if (lobbyRetries > MAX_WS_RETRIES) return;  // Stop retrying — polling fallback is active
+                    const jitter = Math.random() * 500;
+                    reconnectTimer = setTimeout(connectLobbyWs, lobbyBackoff + jitter);
+                    lobbyBackoff = Math.min(lobbyBackoff * 2, 30000);
                 };
                 ws.onerror = () => { ws?.close(); };
             } catch { }
@@ -146,6 +164,7 @@ export default function JobDetailPage() {
         function connectLogWs() {
             try {
                 logWs = new WebSocket(`${wsUrl}/api/logs/${jobId}`);
+                logWs.onopen = () => { logBackoff = 1000; logRetries = 0; };  // Reset on successful connect
                 logWs.onmessage = (event) => {
                     try {
                         const data = JSON.parse(event.data);
@@ -155,7 +174,11 @@ export default function JobDetailPage() {
                     } catch { }
                 };
                 logWs.onclose = () => {
-                    setTimeout(connectLogWs, 5000);
+                    logRetries++;
+                    if (logRetries > MAX_WS_RETRIES) return;  // Stop retrying — polling fallback is active
+                    const jitter = Math.random() * 500;
+                    logReconnectTimer = setTimeout(connectLogWs, logBackoff + jitter);
+                    logBackoff = Math.min(logBackoff * 2, 30000);
                 };
                 logWs.onerror = () => { logWs?.close(); };
             } catch { }
@@ -165,8 +188,9 @@ export default function JobDetailPage() {
         connectLogWs();
 
         return () => {
-            clearInterval(pollInterval);
+            if (pollIntervalRef.current) { clearInterval(pollIntervalRef.current); pollIntervalRef.current = null; }
             if (reconnectTimer) clearTimeout(reconnectTimer);
+            if (logReconnectTimer) clearTimeout(logReconnectTimer);
             ws?.close();
             logWs?.close();
         };

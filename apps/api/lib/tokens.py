@@ -19,7 +19,17 @@ except ImportError:
     jwt = None  # PyJWT not installed — fallback to v1 token verification
 
 
-SECRET_KEY = os.environ.get("JWT_SECRET", "dev-secret-change-in-production")
+_jwt_secret = os.environ.get("JWT_SECRET", "")
+if not _jwt_secret:
+    import warnings
+    warnings.warn(
+        "JWT_SECRET not set — using random ephemeral key. "
+        "Set JWT_SECRET in .env for persistent token validation.",
+        stacklevel=2,
+    )
+    import secrets as _secrets
+    _jwt_secret = _secrets.token_urlsafe(64)
+SECRET_KEY = _jwt_secret
 
 ROLE_PERMISSIONS = {
     "lead": [

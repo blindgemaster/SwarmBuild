@@ -7,7 +7,7 @@ enqueues a merge request. The merge agent (or server) processes them in order.
 Reference: The Engineering/02-MERGE-RESOLUTION.md
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional
@@ -117,7 +117,7 @@ async def update_merge_status(job_id: str, queue_id: str, req: ResolveRequest):
     update_data = {
         "status": req.decision,
         "resolution_by": req.resolution_by,
-        "completed_at": datetime.utcnow().isoformat(),
+        "completed_at": datetime.now(timezone.utc).isoformat(),
     }
 
     if req.conflict_diff:
@@ -168,7 +168,7 @@ async def resolve_conflict(job_id: str, queue_id: str, req: ResolveRequest, requ
     db.table("merge_queue").update({
         "status": "merged",
         "resolution_by": req.resolution_by or "human",
-        "completed_at": datetime.utcnow().isoformat(),
+        "completed_at": datetime.now(timezone.utc).isoformat(),
     }).eq("id", queue_id).execute()
 
     await manager.broadcast(job_id, {

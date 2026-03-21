@@ -86,12 +86,12 @@ async def watchdog_tick():
                     "log_summary": f"Agent disconnected after {int(elapsed.total_seconds())}s of silence",
                 }).execute()
 
-                # Release the task back to available
+                # Release the task back to available (verify it's still locked by this agent)
                 db.table("tasks").update({
                     "status": "available",
                     "locked_by_token": None,
-                    "updated_at": datetime.utcnow().isoformat(),
-                }).eq("id", task["id"]).execute()
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }).eq("id", task["id"]).eq("locked_by_token", token).eq("status", "locked").execute()
 
                 print(f"[watchdog] Released task '{task['title']}' (id={task['id']}) — agent disconnected")
 
@@ -134,7 +134,7 @@ async def watchdog_tick():
         elif current_status == "disconnected" and elapsed > LEFT_THRESHOLD:
             db.table("contributors").update({
                 "contributor_status": "left",
-                "left_at": datetime.utcnow().isoformat(),
+                "left_at": datetime.now(timezone.utc).isoformat(),
             }).eq("id", contrib_id).execute()
 
             await manager.broadcast(job_id, {

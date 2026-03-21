@@ -52,14 +52,14 @@ async function pushViaToken(githubToken, cwdPath) {
     await exec(`git push ${httpsUrl} HEAD:main`, { cwd });
 }
 
-// v2: Per-task token tracking
-let taskStartTokens = 0;
+// v2.2: Per-task token tracking (Map instead of global to handle concurrent claims)
+const taskTokenStart = new Map();  // taskId → token count at claim time
 let totalTokensUsed = 0;
 
 function getTotalTokensUsed() { return totalTokensUsed; }
 
 // Helper: push to a specific branch with retry (SSH key or token)
-async function pushToRemote(branchName, cwdPath) {
+async function pushToRemote(branchName, cwdPath, force = false) {
     const githubToken = process.env.GITHUB_TOKEN || process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
 
     // Check if remote exists
@@ -75,10 +75,12 @@ async function pushToRemote(branchName, cwdPath) {
     let hasKey = false;
     try { await fs.access(keyPath); hasKey = true; } catch { /* no key */ }
 
+    const forceFlag = force ? " --force-with-lease" : "";
+
     if (hasKey) {
         for (let attempt = 1; attempt <= 3; attempt++) {
             try {
-                await runGitCommand(`git push origin HEAD:${branchName}`, cwdPath);
+                await runGitCommand(`git push origin HEAD:${branchName}${forceFlag}`, cwdPath);
                 return `Successfully pushed to branch '${branchName}'.`;
             } catch (e) {
                 if (attempt === 3) throw e;
@@ -92,7 +94,7 @@ async function pushToRemote(branchName, cwdPath) {
         const repoPath = parseGithubRepo(remoteUrl);
         if (!repoPath) throw new Error(`Could not parse GitHub repo from: ${remoteUrl.trim()}`);
         const httpsUrl = `https://x-access-token:${githubToken}@github.com/${repoPath}.git`;
-        await exec(`git push ${httpsUrl} HEAD:${branchName}`, { cwd: cwdPath });
+        await exec(`git push${forceFlag} ${httpsUrl} HEAD:${branchName}`, { cwd: cwdPath });
         return `Successfully pushed to branch '${branchName}'.`;
     }
 
@@ -175,6 +177,18 @@ export async function runMCPServer(relayUrl, workerToken, workspacePath) {
                         properties: { content: { type: "string" } },
                         required: ["content"]
                     }
+                },
+                {
+                    name: "swarmbuild_cancel_task",
+                    description: "Cancel a pending/available task. Use when human requests a plan change and existing tasks are no longer needed.",
+                    inputSchema: {
+                        type: "object",
+                        properties: {
+                            task_id: { type: "string", description: "The task ID to cancel" },
+                            reason: { type: "string", description: "Why this task is being cancelled" }
+                        },
+                        required: ["task_id"]
+                    }
                 }
             ]
         };
@@ -185,12 +199,14 @@ export async function runMCPServer(relayUrl, workerToken, workspacePath) {
             if (request.params.name === "swarmbuild_get_tasks") {
                 const tasks = await api.getTasks();
 
-                // v2: Group by claimability for better display
+                // v2.3: Group by status for better display (includes review, cancelled)
                 const claimable = tasks.filter(t => t.is_claimable && t.status === "available");
                 const blocked = tasks.filter(t => !t.is_claimable && t.status === "available");
                 const inProgress = tasks.filter(t => t.status === "locked");
+                const inReview = tasks.filter(t => t.status === "review");
                 const completed = tasks.filter(t => t.status === "completed");
                 const failed = tasks.filter(t => t.status === "failed");
+                const cancelled = tasks.filter(t => t.status === "cancelled");
 
                 const formatted = `## Available Tasks (can claim now)
 ${claimable.map(t => `- [${t.id.slice(0, 8)}] ${t.title} (${t.assigned_role || 'any'}) — priority: ${t.priority_score || 0}`).join("\n") || "None — waiting for dependencies"}
@@ -200,10 +216,12 @@ ${blocked.map(t => `- [${t.id.slice(0, 8)}] ${t.title} — waiting on: ${(t.bloc
 
 ## In Progress
 ${inProgress.map(t => `- [${t.id.slice(0, 8)}] ${t.title} (locked)`).join("\n") || "None"}
+${inReview.length ? `\n## Pending Review\n${inReview.map(t => `- [${t.id.slice(0, 8)}] ${t.title} (awaiting approval)`).join("\n")}` : ""}
 
 ## Completed
 ${completed.map(t => `- [${t.id.slice(0, 8)}] ${t.title} ✅`).join("\n") || "None"}
 ${failed.length ? `\n## Failed\n${failed.map(t => `- [${t.id.slice(0, 8)}] ${t.title} ❌`).join("\n")}` : ""}
+${cancelled.length ? `\n## Cancelled\n${cancelled.map(t => `- [${t.id.slice(0, 8)}] ${t.title} 🚫`).join("\n")}` : ""}
 
 Full task data (JSON):
 ${JSON.stringify(tasks, null, 2)}`;
@@ -215,8 +233,8 @@ ${JSON.stringify(tasks, null, 2)}`;
                 const taskId = request.params.arguments.task_id;
                 const res = await api.claimTask(taskId);
 
-                // v2: Record token count at task start for per-task tracking
-                taskStartTokens = getTotalTokensUsed();
+                // v2.2: Record token count at task start (keyed by taskId, not global)
+                taskTokenStart.set(taskId, getTotalTokensUsed());
 
                 // v2: Branch-per-task git flow
                 const branchName = `task/${taskId.slice(0, 8)}`;
@@ -256,9 +274,9 @@ ${JSON.stringify(tasks, null, 2)}`;
                 // v2.1: Include recent commits from main so agent knows what others have done
                 let recentCommits = "";
                 try {
-                    const { stdout } = await exec(
+                    const { stdout } = await runGitCommand(
                         'git log --oneline -10 origin/main',
-                        { cwd: workspacePath }
+                        workspacePath
                     );
                     recentCommits = stdout.trim();
                 } catch { /* no commits yet or no remote */ }
@@ -287,11 +305,14 @@ ${JSON.stringify(tasks, null, 2)}`;
                 const taskId = request.params.arguments.task_id;
                 const branchName = `task/${taskId.slice(0, 8)}`;
 
-                // v2: Compute per-task token usage
-                const taskTokens = getTotalTokensUsed() - taskStartTokens;
+                // v2.2: Compute per-task token usage from Map (handles concurrent tasks)
+                const startTokens = taskTokenStart.get(taskId) || 0;
+                const taskTokens = getTotalTokensUsed() - startTokens;
+                taskTokenStart.delete(taskId);  // Clean up
 
                 // v2: Commit and push to task branch (NOT main)
                 let gitStatus = "No git remote detected.";
+                let mergeSuccess = false;
                 try {
                     await runGitCommand("git add .", workspacePath);
                     try {
@@ -308,23 +329,78 @@ ${JSON.stringify(tasks, null, 2)}`;
                     }
 
                     // v2.1: Rebase on latest main before pushing (picks up other agents' merged work)
+                    let synced = false;
                     try {
                         await runGitCommand("git fetch origin", workspacePath);
                         await runGitCommand("git rebase origin/main", workspacePath);
+                        synced = true;
                     } catch {
-                        // Rebase conflict — abort and push as-is, merge queue will handle it
+                        // Rebase conflict — abort and try merge instead (more forgiving)
                         try { await runGitCommand("git rebase --abort", workspacePath); } catch { /* already clean */ }
+                        try {
+                            await runGitCommand("git merge origin/main --no-edit", workspacePath);
+                            synced = true;
+                        } catch {
+                            // Merge also failed — abort and force push as last resort
+                            try { await runGitCommand("git merge --abort", workspacePath); } catch { /* already clean */ }
+                            console.error(`[MCP] WARNING: Both rebase and merge with origin/main failed for ${branchName}. Force pushing branch as-is.`);
+                        }
                     }
 
-                    // Push to task branch (not main)
-                    gitStatus = await pushToRemote(branchName, workspacePath);
+                    // Push to task branch (not main) — force push to handle rebase rewrites
+                    gitStatus = await pushToRemote(branchName, workspacePath, true);
 
                     // Enqueue merge request on the server
+                    let mergeQueueId = null;
                     try {
-                        await api.enqueueMerge(taskId, branchName);
+                        const mergeResult = await api.enqueueMerge(taskId, branchName);
+                        mergeQueueId = mergeResult.queue_id;
                         gitStatus += " Merge enqueued.";
+                        mergeSuccess = true;
                     } catch (mergeErr) {
                         gitStatus += ` (merge enqueue failed: ${mergeErr.message})`;
+                    }
+
+                    // v2.5.1: Wait for merge to complete before returning
+                    // This prevents sequential tasks from creating overlapping branches
+                    if (mergeSuccess && mergeQueueId) {
+                        const MERGE_WAIT_TIMEOUT = 90_000; // 90 seconds max
+                        const MERGE_POLL_INTERVAL = 5_000;  // Check every 5 seconds
+                        const waitStart = Date.now();
+                        let mergeCompleted = false;
+
+                        console.log(`[MCP] Waiting for merge of ${branchName} to complete...`);
+                        while (Date.now() - waitStart < MERGE_WAIT_TIMEOUT) {
+                            await new Promise(r => setTimeout(r, MERGE_POLL_INTERVAL));
+                            try {
+                                // Check if our branch has been merged by fetching and checking if main moved
+                                await runGitCommand("git fetch origin", workspacePath);
+                                // Try to find our commit on origin/main
+                                try {
+                                    await runGitCommand(`git merge-base --is-ancestor ${branchName} origin/main`, workspacePath);
+                                    // If this succeeds, our branch is merged into main
+                                    mergeCompleted = true;
+                                    break;
+                                } catch {
+                                    // Not merged yet — keep waiting
+                                }
+                            } catch {
+                                // Fetch failed — keep waiting
+                            }
+                        }
+
+                        if (mergeCompleted) {
+                            gitStatus += " Merge confirmed.";
+                            console.log(`[MCP] Merge of ${branchName} confirmed on main.`);
+                            // Sync local main with the merged state
+                            try {
+                                await runGitCommand("git checkout main", workspacePath);
+                                await runGitCommand("git pull --rebase origin main", workspacePath);
+                            } catch { /* best effort */ }
+                        } else {
+                            gitStatus += " Merge wait timed out (90s) — proceeding anyway.";
+                            console.log(`[MCP] Merge wait timed out for ${branchName}. Proceeding.`);
+                        }
                     }
 
                 } catch (err) {
@@ -332,14 +408,24 @@ ${JSON.stringify(tasks, null, 2)}`;
                     console.error("[MCP] Git Push Error:", err.message);
                 }
 
-                const res = await api.completeTask(taskId, request.params.arguments.status, taskTokens);
-
-                return {
-                    content: [{
-                        type: "text",
-                        text: JSON.stringify({ ...res, git_sync: gitStatus, tokens_used: taskTokens, branch: branchName }, null, 2)
-                    }]
-                };
+                // v2.3: Only mark complete if merge was enqueued (or no remote configured)
+                if (mergeSuccess || gitStatus.includes("No git remote")) {
+                    const res = await api.completeTask(taskId, request.params.arguments.status, taskTokens);
+                    return {
+                        content: [{
+                            type: "text",
+                            text: JSON.stringify({ ...res, git_sync: gitStatus, tokens_used: taskTokens, branch: branchName }, null, 2)
+                        }]
+                    };
+                } else {
+                    return {
+                        isError: true,
+                        content: [{
+                            type: "text",
+                            text: `Task NOT marked complete because merge failed. ${gitStatus}. Fix the issue and try completing again.`
+                        }]
+                    };
+                }
             }
 
             if (request.params.name === "swarmbuild_create_tasks") {
@@ -355,6 +441,13 @@ ${JSON.stringify(tasks, null, 2)}`;
             if (request.params.name === "swarmbuild_send_message") {
                 const res = await api.broadcastMessage(request.params.arguments.content);
                 return { content: [{ type: "text", text: JSON.stringify(res) }] };
+            }
+
+            if (request.params.name === "swarmbuild_cancel_task") {
+                const taskId = request.params.arguments.task_id;
+                const reason = request.params.arguments.reason || "Cancelled by coordinator";
+                const res = await api.cancelTask(taskId, reason);
+                return { content: [{ type: "text", text: JSON.stringify(res, null, 2) }] };
             }
 
             throw new Error("Unknown tool");

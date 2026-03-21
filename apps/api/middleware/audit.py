@@ -155,24 +155,31 @@ class AuditMiddleware(BaseHTTPMiddleware):
 
             if job_id:
                 audit_entry["job_id"] = job_id
-                db.table("audit_log").insert(audit_entry).execute()
-            else:
+            elif token:
                 # Try to resolve job_id from token
-                if token:
-                    contrib = (
-                        db.table("contributors")
-                        .select("id, job_id, role")
-                        .eq("worker_token", token)
-                        .limit(1)
-                        .execute()
-                    )
-                    if contrib.data:
-                        audit_entry["contributor_id"] = contrib.data[0]["id"]
-                        audit_entry["job_id"] = contrib.data[0]["job_id"]
-                        audit_entry["role"] = contrib.data[0].get("role")
-                        db.table("audit_log").insert(audit_entry).execute()
+                contrib = (
+                    db.table("contributors")
+                    .select("id, job_id, role")
+                    .eq("worker_token", token)
+                    .limit(1)
+                    .execute()
+                )
+                if contrib.data:
+                    audit_entry["contributor_id"] = contrib.data[0]["id"]
+                    audit_entry["job_id"] = contrib.data[0]["job_id"]
+                    audit_entry["role"] = contrib.data[0].get("role")
+
+            # v2.2: Always insert audit entry — use "unknown" job_id if unresolved
+            # instead of silently dropping the log
+            if "job_id" not in audit_entry:
+                import logging
+                logging.warning(f"[audit] Could not resolve job_id for {audit_entry['action']} (token_hash={audit_entry.get('worker_token')})")
+                audit_entry["job_id"] = "00000000-0000-0000-0000-000000000000"
+
+            db.table("audit_log").insert(audit_entry).execute()
         except Exception as e:
             # Audit logging should never break the request
-            print(f"[audit] Failed to log: {e}")
+            import logging
+            logging.warning(f"[audit] Failed to log: {e}")
 
         return response

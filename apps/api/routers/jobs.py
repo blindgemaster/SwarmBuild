@@ -19,6 +19,9 @@ router = APIRouter()
 
 # ── Request/Response Models ─────────────────────────
 
+VALID_APPROVAL_MODES = ("auto_approve", "require_review", "require_human_approval")
+
+
 class CreateJobRequest(BaseModel):
     title: str
     description: str
@@ -27,6 +30,7 @@ class CreateJobRequest(BaseModel):
     constraints: Optional[str] = None
     examples: Optional[str] = None
     agent_count: int = 1
+    approval_mode: str = "auto_approve"  # auto_approve | require_review | require_human_approval
 
 
 class UpdateJobRequest(BaseModel):
@@ -42,6 +46,10 @@ class UpdateRolesRequest(BaseModel):
     roles: list[str]
 
 
+class UpdateJobSettingsRequest(BaseModel):
+    approval_mode: str  # auto_approve | require_review | require_human_approval
+
+
 # ── Endpoints ───────────────────────────────────────
 
 @router.post("")
@@ -49,6 +57,13 @@ async def create_job(req: CreateJobRequest, request: Request):
     """Create a new job (submit an idea)."""
     user_id = await _get_user_id(request)
     db = get_supabase()
+
+    # Validate approval_mode
+    if req.approval_mode not in VALID_APPROVAL_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid approval_mode '{req.approval_mode}'. Must be one of: {', '.join(VALID_APPROVAL_MODES)}"
+        )
 
     data = {
         "title": req.title,
@@ -60,9 +75,18 @@ async def create_job(req: CreateJobRequest, request: Request):
         "poster_id": user_id,
         "status": "pending",
         "required_agent_count": req.agent_count,
+        "approval_mode": req.approval_mode,
     }
 
-    result = db.table("jobs").insert(data).execute()
+    try:
+        result = db.table("jobs").insert(data).execute()
+    except Exception as e:
+        if "approval_mode" in str(e):
+            # Column not yet added to DB — insert without it
+            data.pop("approval_mode", None)
+            result = db.table("jobs").insert(data).execute()
+        else:
+            raise
     return result.data[0]
 
 
@@ -227,6 +251,44 @@ async def update_job(job_id: str, req: UpdateJobRequest, request: Request):
     update_data["updated_at"] = datetime.utcnow().isoformat()
 
     result = db.table("jobs").update(update_data).eq("id", job_id).execute()
+    return result.data[0]
+
+
+@router.patch("/{job_id}/settings")
+async def update_job_settings(job_id: str, req: UpdateJobSettingsRequest, request: Request):
+    """
+    Update job settings (e.g. approval_mode). Only the job poster (OP) can change settings.
+    This can be done at any time, even while the job is running.
+    """
+    user_id = await _get_user_id(request)
+    db = get_supabase()
+
+    # Verify ownership
+    job_result = db.table("jobs").select("poster_id").eq("id", job_id).execute()
+    if not job_result.data:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = job_result.data[0]
+    if job["poster_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Only the job poster can update settings")
+
+    # Validate approval_mode
+    if req.approval_mode not in VALID_APPROVAL_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid approval_mode '{req.approval_mode}'. Must be one of: {', '.join(VALID_APPROVAL_MODES)}"
+        )
+
+    try:
+        result = db.table("jobs").update({
+            "approval_mode": req.approval_mode,
+            "updated_at": datetime.utcnow().isoformat(),
+        }).eq("id", job_id).execute()
+    except Exception as e:
+        if "approval_mode" in str(e):
+            raise HTTPException(status_code=501, detail="approval_mode column not yet in database")
+        raise
+
     return result.data[0]
 
 

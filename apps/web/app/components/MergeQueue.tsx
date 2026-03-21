@@ -10,6 +10,7 @@ interface MergeItem {
     conflict_tier: number | null;
     conflict_files: string[] | null;
     resolution_by: string | null;
+    conflict_diff: string | null;
     created_at: string;
     completed_at: string | null;
     files_changed: number;
@@ -24,6 +25,7 @@ const STATUS_STYLES: Record<string, { bg: string; text: string; label: string }>
     conflict: { bg: "bg-red-500/10", text: "text-[var(--red)]", label: "Conflict" },
     failed: { bg: "bg-red-500/10", text: "text-[var(--red)]", label: "Failed" },
     cancelled: { bg: "bg-gray-500/10", text: "text-[var(--text-muted)]", label: "Cancelled" },
+    retry_pending: { bg: "bg-orange-500/10", text: "text-orange-500", label: "Retrying..." },
 };
 
 export function MergeQueue({ jobId, apiUrl }: { jobId: string; apiUrl: string }) {
@@ -93,6 +95,18 @@ export function MergeQueue({ jobId, apiUrl }: { jobId: string; apiUrl: string })
                                         by {item.resolution_by}
                                     </span>
                                 )}
+                                {item.status === "retry_pending" && item.conflict_diff && (() => {
+                                    try {
+                                        const info = JSON.parse(item.conflict_diff);
+                                        return (
+                                            <span className="text-[10px] text-orange-500">
+                                                attempt {info.retry_count}/3
+                                            </span>
+                                        );
+                                    } catch {
+                                        return null;
+                                    }
+                                })()}
                             </div>
                         </div>
                         <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${style.bg} ${style.text}`}>

@@ -223,8 +223,8 @@ function CommentNode({
                                 </form>
                             )}
 
-                            {/* Recursive children */}
-                            {replies.length > 0 && (
+                            {/* Recursive children — capped at depth 10 to prevent stack overflow */}
+                            {replies.length > 0 && depth < 10 && (
                                 <div style={{ marginTop: 4 }}>
                                     {replies.map(child => (
                                         <CommentNode
@@ -237,6 +237,11 @@ function CommentNode({
                                     ))}
                                 </div>
                             )}
+                            {replies.length > 0 && depth >= 10 && (
+                                <div style={{ marginTop: 4, fontSize: 12, color: "var(--text-muted)", fontStyle: "italic", paddingLeft: 12 }}>
+                                    {replies.length} more {replies.length === 1 ? "reply" : "replies"} (thread too deep to display)
+                                </div>
+                            )}
                         </>
                     )}
                 </div>
@@ -247,8 +252,9 @@ function CommentNode({
 
 // ── Root CommentThread ───────────────────────────────
 
-function countAll(comments: Comment[]): number {
-    return comments.reduce((acc, c) => acc + 1 + countAll(c.replies ?? []), 0);
+function countAll(comments: Comment[], maxDepth = 20): number {
+    if (maxDepth <= 0) return comments.length;  // v2.2: Guard against circular/deep data
+    return comments.reduce((acc, c) => acc + 1 + countAll(c.replies ?? [], maxDepth - 1), 0);
 }
 
 export function CommentThread({
